@@ -20,7 +20,7 @@ import (
 	"iptables-config-ui/internal/server"
 )
 
-//go:embed all:web/dist
+//go:embed web/dist/* web/dist/**/*
 var webDist embed.FS
 
 func main() {

@@ -1,7 +1,7 @@
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **iptables-config-ui** (568 symbols, 1614 relationships, 49 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **iptables-config-ui** (481 symbols, 1351 relationships, 41 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
@@ -39,14 +39,5 @@ This project is indexed by GitNexus as **iptables-config-ui** (568 symbols, 1614
 | Rename / extract / split / refactor | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
 | Tools, resources, schema reference | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
 | Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
-| Work in the Firewall area (64 symbols) | `.claude/skills/generated/firewall/SKILL.md` |
-| Work in the Ui area (25 symbols) | `.claude/skills/generated/ui/SKILL.md` |
-| Work in the Server area (25 symbols) | `.claude/skills/generated/server/SKILL.md` |
-| Work in the Cluster_15 area (12 symbols) | `.claude/skills/generated/cluster-15/SKILL.md` |
-| Work in the Cluster_17 area (6 symbols) | `.claude/skills/generated/cluster-17/SKILL.md` |
-| Work in the Cluster_16 area (5 symbols) | `.claude/skills/generated/cluster-16/SKILL.md` |
-| Work in the Cluster_11 area (4 symbols) | `.claude/skills/generated/cluster-11/SKILL.md` |
-| Work in the Cluster_12 area (4 symbols) | `.claude/skills/generated/cluster-12/SKILL.md` |
-| Work in the Cluster_13 area (4 symbols) | `.claude/skills/generated/cluster-13/SKILL.md` |
 
 <!-- gitnexus:end -->
