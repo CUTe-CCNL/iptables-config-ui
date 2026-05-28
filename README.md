@@ -1,51 +1,107 @@
 # iptables Config UI
 
-A temporary web UI for editing live IPv4 `iptables` rules. The React/Vite UI is embedded into a single Go binary.
+iptables Config UI is a small web tool for inspecting and editing live IPv4
+`iptables` rules. It serves a React/Vite interface from a single Go binary and
+applies changes through the host's `iptables-save` and `iptables-restore`
+commands.
 
-## Development
+## What it does
+
+- Loads the current live rules into an editable draft.
+- Supports structured `filter` rules, NAT port forwards, and NAT masquerade
+  rules.
+- Preserves unsupported rules as raw read-only lines when possible.
+- Validates drafts before applying them.
+- Protects apply with a snapshot ID so stale drafts do not overwrite newer live
+  rules.
+- Keeps one in-memory rollback snapshot after a successful apply.
+- Provides `--mock` mode for local development without touching host firewall
+  state.
+
+## Requirements
+
+- Go.
+- pnpm.
+- A Linux target host with `iptables`, `iptables-save`, and
+  `iptables-restore`.
+- Root privileges for live mode. Use `sudo` when running against real firewall
+  state.
+
+## Quick start
+
+Build the web UI, run tests, build the Go binary, then start in mock mode:
 
 ```bash
-pnpm install --store-dir /tmp/iptables-config-ui-pnpm-store
-pnpm build
+pnpm --dir web install
+pnpm --dir web run build
 go test ./...
 go build -buildvcs=false -o iptables-config-ui .
-./iptables-config-ui --mock
+./iptables-config-ui --mock --addr 127.0.0.1:8921
 ```
 
-Open the URL printed by the server. It includes a one-time `?token=...` value for write actions.
+Open the URL printed by the server. It includes a one-time `?token=...` query
+value used for write actions.
 
-## Live Usage
+## Live usage
 
 Build a static Linux binary:
 
 ```bash
-pnpm build
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -buildvcs=false -trimpath -tags "netgo osusergo" -ldflags "-s -w" -o dist/iptables-config-ui-linux-amd64 .
-```
-
-Or use the packaged script:
-
-```bash
-pnpm run build:static
+./scripts/build-static-linux.sh
 ```
 
 Run it on the target host:
 
 ```bash
-sudo ./iptables-config-ui-linux-amd64
+sudo ./dist/iptables-config-ui-linux-amd64
 ```
 
-The service binds to `0.0.0.0:8921` by default, generates a one-time session token, and keeps rollback state only in memory while the process is alive.
+The service binds to `0.0.0.0:8921` by default and prints access URLs with the
+session token. Bind to localhost if you do not want network access:
 
-Use `--addr 127.0.0.1:8921` if you want local-only access.
+```bash
+sudo ./dist/iptables-config-ui-linux-amd64 --addr 127.0.0.1:8921
+```
 
-This tool does not persist firewall rules across reboot. It edits live `iptables` state only.
+Available flags:
 
-## Alpine Notes
+- `--addr`: HTTP listen address. Defaults to `0.0.0.0:8921`.
+- `--mock`: use an in-memory firewall backend for development.
 
-Use the static build above for Alpine. A normal Go build can link against glibc on the build machine, which fails on Alpine because Alpine uses musl.
+## Safety notes
 
-The binary embeds the web UI and Go runtime dependencies, but the host still needs the `iptables` userspace tools because the service applies rules through `iptables-save` and `iptables-restore`:
+- Mutating API calls require the generated `X-Session-Token`.
+- The tool edits live `iptables` state only; it does not persist rules across
+  reboot.
+- Rollback state is kept only in memory and is lost when the process exits.
+- Apply fails if live rules changed after the draft was loaded.
+- Unsupported rules are preserved as raw/read-only entries where possible, but
+  only supported structured rules can be edited in the UI.
+
+## Development
+
+Run the frontend dev server:
+
+```bash
+pnpm --dir web run dev
+```
+
+The Vite dev server proxies `/api` to `http://127.0.0.1:8921`. In another
+terminal, run the Go server in mock mode:
+
+```bash
+pnpm --dir web run build
+go run . --mock --addr 127.0.0.1:8921
+```
+
+## Alpine and static builds
+
+Use `./scripts/build-static-linux.sh` for Alpine or other minimal Linux targets.
+A normal Go build can depend on the build machine's libc, while the script
+builds with `CGO_ENABLED=0`.
+
+The binary embeds the web UI and Go runtime dependencies, but the target host
+still needs the `iptables` userspace tools:
 
 ```bash
 apk add iptables
