@@ -13,6 +13,7 @@ func ParseRuleset(raw string) (Ruleset, error) {
 	}
 
 	var table string
+	declaredChains := defaultChainSet()
 	order := 0
 	for lineNo, line := range strings.Split(raw, "\n") {
 		line = strings.TrimSpace(line)
@@ -38,6 +39,7 @@ func ParseRuleset(raw string) (Ruleset, error) {
 			policy, ok := parsePolicy(table, line, order)
 			if ok {
 				rs.Policies = append(rs.Policies, policy)
+				declaredChains.add(policy.Table, policy.Chain)
 			} else {
 				rs.RawRules = append(rs.RawRules, rawRule(table, "", line, order, "unsupported policy line"))
 			}
@@ -49,7 +51,7 @@ func ParseRuleset(raw string) (Ruleset, error) {
 			continue
 		}
 
-		parsed, err := parseAppendLine(table, line, order)
+		parsed, err := parseAppendLine(table, line, order, declaredChains[table])
 		if err != nil {
 			rs.RawRules = append(rs.RawRules, rawRule(table, "", line, order, err.Error()))
 			continue
@@ -70,18 +72,30 @@ func ParseRuleset(raw string) (Ruleset, error) {
 }
 
 func parsePolicy(table, line string, order int) (Policy, bool) {
+	if !supportedTable(table) {
+		return Policy{}, false
+	}
 	body := strings.TrimPrefix(line, ":")
 	parts := strings.Fields(body)
 	if len(parts) < 2 {
 		return Policy{}, false
 	}
-	if !allowedChain(table, parts[0]) || !allowedPolicy(parts[1]) {
+	chain := parts[0]
+	policy := strings.ToUpper(parts[1])
+	if !validChainName(chain) {
 		return Policy{}, false
 	}
-	return Policy{Table: table, Chain: parts[0], Policy: parts[1], Order: order}, true
+	if allowedChain(table, chain) {
+		if !allowedPolicy(policy) {
+			return Policy{}, false
+		}
+	} else if policy != "-" {
+		return Policy{}, false
+	}
+	return Policy{Table: table, Chain: chain, Policy: policy, Order: order}, true
 }
 
-func parseAppendLine(table, line string, order int) (any, error) {
+func parseAppendLine(table, line string, order int, chains map[string]bool) (any, error) {
 	tokens, err := splitTokens(line)
 	if err != nil {
 		return nil, err
@@ -91,10 +105,11 @@ func parseAppendLine(table, line string, order int) (any, error) {
 	}
 
 	fields := parsedFields{
-		table: table,
-		chain: tokens[1],
-		order: order,
-		line:  line,
+		table:  table,
+		chain:  tokens[1],
+		order:  order,
+		line:   line,
+		chains: chains,
 	}
 	for i := 2; i < len(tokens); i++ {
 		switch tokens[i] {
@@ -144,6 +159,7 @@ type parsedFields struct {
 	chain           string
 	order           int
 	line            string
+	chains          map[string]bool
 	protocol        string
 	source          string
 	destination     string
@@ -175,14 +191,14 @@ func (f parsedFields) toFilterRule() any {
 		Order:           f.order,
 		Extra:           append([]string(nil), f.extra...),
 	}
-	if !isSupportedFilterRule(r) {
+	if !isSupportedFilterRule(r, f.chains) {
 		return rawRule(f.table, f.chain, f.line, f.order, "unsupported filter rule")
 	}
 	return r
 }
 
 func (f parsedFields) toNATRule() any {
-	if f.target == "DNAT" && f.chain == "PREROUTING" {
+	if f.target == "DNAT" {
 		ip, port := splitDestination(f.toDestination)
 		r := NatRule{
 			ID:              ruleID("nat", f.chain, f.order, f.line),
@@ -202,11 +218,11 @@ func (f parsedFields) toNATRule() any {
 			Order:           f.order,
 			Extra:           append([]string(nil), f.extra...),
 		}
-		if isSupportedPortForward(r) {
+		if isSupportedPortForward(r, f.chains) {
 			return r
 		}
 	}
-	if f.target == "MASQUERADE" && f.chain == "POSTROUTING" {
+	if f.target == "MASQUERADE" {
 		r := NatRule{
 			ID:           ruleID("nat", f.chain, f.order, f.line),
 			Type:         "masquerade",
@@ -219,7 +235,7 @@ func (f parsedFields) toNATRule() any {
 			Order:        f.order,
 			Extra:        append([]string(nil), f.extra...),
 		}
-		if len(r.Extra) == 0 {
+		if isSupportedPortForward(r, f.chains) {
 			return r
 		}
 	}

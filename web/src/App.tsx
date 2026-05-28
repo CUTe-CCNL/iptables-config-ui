@@ -87,7 +87,6 @@ import {
   isEqualJSON,
   newId,
   nextOrder,
-  reorder,
 } from "@/lib/utils"
 import { SUPPORTED_LANGUAGES, useI18n, type Language } from "@/lib/i18n"
 import {
@@ -107,11 +106,19 @@ import type {
 } from "@/types/firewall"
 
 type Tab = "overview" | "filter" | "nat" | "raw"
+type TableName = "filter" | "nat"
 type ConfirmAction = "apply" | "rollback" | "shutdown" | "refresh" | null
 type FilterEditor = { mode: "create" | "edit"; rule?: FilterRule } | null
 type BadgeTone = "default" | "success" | "warning" | "danger" | "muted"
 type FilterProtocolOption = "any" | "tcp" | "udp" | "icmp"
 type TFunction = ReturnType<typeof useI18n>["t"]
+type ErrorDisplay = { title: string; description?: string }
+type ErrorCopy = {
+  unknownError: string
+  snapshotDriftTitle: string
+  snapshotDriftHint: string
+  useMockModeHint: string
+}
 type FilterRuleFormState = {
   chain: FilterRule["chain"]
   target: FilterRule["target"]
@@ -126,6 +133,16 @@ type FilterRuleFormState = {
 }
 
 const SESSION_TOKEN_KEY = "iptables-config-ui-session-token"
+const BUILT_IN_CHAINS: Record<TableName, string[]> = {
+  filter: ["INPUT", "FORWARD", "OUTPUT"],
+  nat: ["PREROUTING", "INPUT", "OUTPUT", "POSTROUTING"],
+}
+const FILTER_TARGETS = ["ACCEPT", "DROP", "REJECT", "RETURN"]
+const CHAIN_NAME_RE = /^[A-Za-z0-9_.:+-]{1,32}$/
+const ALL_CHAINS_VALUE = "__iptables-ui/all-chains"
+const SNAPSHOT_DRIFT_MESSAGE =
+  "live iptables rules changed since draft was loaded"
+const COMMANDS_UNAVAILABLE_MESSAGE = "iptables commands unavailable"
 
 const emptyRuleset: Ruleset = {
   snapshotId: "",
@@ -183,7 +200,7 @@ function AppErrorFallback({ error }: { error: Error }) {
 
 function FirewallApp() {
   const { t } = useI18n()
-  const unknownErrorRef = useRef(t("unknownError"))
+  const errorCopyRef = useRef(errorCopy(t))
   const [system, setSystem] = useState<SystemStatus | null>(null)
   const [rules, setRules] = useState<Ruleset | null>(null)
   const [draft, setDraft] = useState<Ruleset | null>(null)
@@ -191,7 +208,7 @@ function FirewallApp() {
   const [activeTab, setActiveTab] = useState<Tab>("overview")
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<ErrorDisplay | null>(null)
   const [filterEditor, setFilterEditor] = useState<FilterEditor>(null)
   const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null)
 
@@ -222,7 +239,7 @@ function FirewallApp() {
   const canValidate = Boolean(draft && token && !loading && !busy)
 
   useEffect(() => {
-    unknownErrorRef.current = t("unknownError")
+    errorCopyRef.current = errorCopy(t)
   }, [t])
 
   const boot = useCallback(async () => {
@@ -239,8 +256,7 @@ function FirewallApp() {
       setRules(response.ruleset)
       setDraft(clone(response.ruleset))
     } catch (err) {
-      const message = formatError(err, unknownErrorRef.current)
-      setError(message)
+      setError(formatErrorDisplay(err, errorCopyRef.current))
       setDraft(clone(emptyRuleset))
     } finally {
       setLoading(false)
@@ -268,9 +284,11 @@ function FirewallApp() {
         description: t("toastRulesRefreshedDescription"),
       })
     } catch (err) {
-      const message = formatError(err, t("unknownError"))
-      setError(message)
-      toast.error(t("toastRefreshFailedTitle"), { description: message })
+      const details = formatErrorDisplay(err, errorCopyRef.current)
+      setError(details)
+      toast.error(t("toastRefreshFailedTitle"), {
+        description: errorToastDescription(details),
+      })
     } finally {
       setBusy(false)
     }
@@ -295,9 +313,11 @@ function FirewallApp() {
       })
       return true
     } catch (err) {
-      const message = formatError(err, t("unknownError"))
-      setError(message)
-      toast.error(t("toastValidationFailedTitle"), { description: message })
+      const details = formatErrorDisplay(err, errorCopyRef.current)
+      setError(details)
+      toast.error(t("toastValidationFailedTitle"), {
+        description: errorToastDescription(details),
+      })
       return false
     } finally {
       setBusy(false)
@@ -352,9 +372,17 @@ function FirewallApp() {
         })
       }
     } catch (err) {
-      const message = formatError(err, t("unknownError"))
-      setError(message)
-      toast.error(actionTitle(action, t), { description: message })
+      const details = formatErrorDisplay(err, errorCopyRef.current)
+      const snapshotDrift = isSnapshotDriftError(err)
+      setError(details)
+      toast.error(
+        snapshotDrift ? t("snapshotDriftTitle") : actionTitle(action, t),
+        {
+          description: snapshotDrift
+            ? details.description
+            : errorToastDescription(details),
+        }
+      )
     } finally {
       setBusy(false)
       setConfirmAction(null)
@@ -457,8 +485,10 @@ function FirewallApp() {
         {error ? (
           <Alert variant="destructive">
             <AlertTriangle className="size-4" />
-            <AlertTitle>{error}</AlertTitle>
-            <AlertDescription>{t("useMockModeHint")}</AlertDescription>
+            <AlertTitle>{error.title}</AlertTitle>
+            {error.description ? (
+              <AlertDescription>{error.description}</AlertDescription>
+            ) : null}
           </Alert>
         ) : null}
 
@@ -529,6 +559,7 @@ function FirewallApp() {
         <FilterRuleDialog
           key={filterEditor?.rule?.id ?? filterEditor?.mode ?? "closed"}
           editor={filterEditor}
+          ruleset={draft ?? emptyRuleset}
           nextOrderValue={nextOrder(draft?.filterRules ?? [])}
           onClose={() => setFilterEditor(null)}
           onSave={(rule) => {
@@ -821,10 +852,25 @@ function FilterRulesPanel({
   onEdit: (rule: FilterRule) => void
 }) {
   const { t } = useI18n()
-  const rows = useMemo(
+  const chains = useMemo(() => tableChainNames(ruleset, "filter"), [ruleset])
+  const [chainFilter, setChainFilter] = useState(ALL_CHAINS_VALUE)
+  const sortedRows = useMemo(
     () => [...ruleset.filterRules].sort((a, b) => a.order - b.order),
     [ruleset.filterRules]
   )
+  const rows = useMemo(
+    () =>
+      chainFilter === ALL_CHAINS_VALUE
+        ? sortedRows
+        : sortedRows.filter((rule) => rule.chain === chainFilter),
+    [chainFilter, sortedRows]
+  )
+
+  useEffect(() => {
+    if (chainFilter !== ALL_CHAINS_VALUE && !chains.includes(chainFilter)) {
+      setChainFilter(ALL_CHAINS_VALUE)
+    }
+  }, [chainFilter, chains])
 
   const remove = useCallback(
     (rule: FilterRule) => {
@@ -838,8 +884,15 @@ function FilterRulesPanel({
 
   const move = useCallback(
     (rule: FilterRule, direction: -1 | 1) => {
-      const index = rows.findIndex((item) => item.id === rule.id)
-      onChange({ ...ruleset, filterRules: reorder(rows, index, direction) })
+      onChange({
+        ...ruleset,
+        filterRules: moveRuleByVisibleOrder(
+          ruleset.filterRules,
+          rows,
+          rule,
+          direction
+        ),
+      })
     },
     [onChange, rows, ruleset]
   )
@@ -916,6 +969,7 @@ function FilterRulesPanel({
   return (
     <section className="space-y-4">
       <PoliciesEditor ruleset={ruleset} onChange={onChange} table="filter" />
+      <ChainManager ruleset={ruleset} onChange={onChange} table="filter" />
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-base font-semibold tracking-normal">
@@ -925,10 +979,17 @@ function FilterRulesPanel({
             {t("filterRulesDescription")}
           </p>
         </div>
-        <Button onClick={onCreate}>
-          <Plus className="size-4" />
-          {t("addRule")}
-        </Button>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+          <ChainFilterSelect
+            value={chainFilter}
+            onValueChange={setChainFilter}
+            chains={chains}
+          />
+          <Button onClick={onCreate}>
+            <Plus className="size-4" />
+            {t("addRule")}
+          </Button>
+        </div>
       </div>
       <DataTable data={rows} columns={columns} empty={t("noFilterRules")} />
     </section>
@@ -942,11 +1003,13 @@ function PoliciesEditor({
 }: {
   ruleset: Ruleset
   onChange: (ruleset: Ruleset) => void
-  table: "filter" | "nat"
+  table: TableName
 }) {
   const { t } = useI18n()
   const policies = [...ruleset.policies]
-    .filter((policy) => policy.table === table)
+    .filter(
+      (policy) => policy.table === table && isBuiltInChain(table, policy.chain)
+    )
     .sort((a, b) => a.order - b.order)
 
   function updatePolicy(policy: Policy, value: string) {
@@ -997,6 +1060,156 @@ function PoliciesEditor({
   )
 }
 
+function ChainManager({
+  ruleset,
+  onChange,
+  table,
+}: {
+  ruleset: Ruleset
+  onChange: (ruleset: Ruleset) => void
+  table: TableName
+}) {
+  const { t } = useI18n()
+  const inputId = useMemo(() => newId(`${table}-chain`), [table])
+  const [chainName, setChainName] = useState("")
+  const [errors, setErrors] = useState<string[]>([])
+  const chains = useMemo(
+    () => tableChainNames(ruleset, table),
+    [ruleset, table]
+  )
+  const customPolicies = useMemo(
+    () =>
+      [...ruleset.policies]
+        .filter(
+          (policy) =>
+            policy.table === table && !isBuiltInChain(table, policy.chain)
+        )
+        .sort((a, b) => a.order - b.order),
+    [ruleset.policies, table]
+  )
+
+  function addChain() {
+    const chain = chainName.trim()
+    if (!CHAIN_NAME_RE.test(chain)) {
+      setErrors([t("validationChainName")])
+      return
+    }
+    if (chains.includes(chain)) {
+      setErrors([t("validationChainExists")])
+      return
+    }
+
+    onChange({
+      ...ruleset,
+      policies: [
+        ...ruleset.policies,
+        {
+          table,
+          chain,
+          policy: "-",
+          order: nextOrder(
+            ruleset.policies.filter((item) => item.table === table)
+          ),
+        },
+      ],
+    })
+    setChainName("")
+    setErrors([])
+    toast.success(t("toastChainAdded", { chain }))
+  }
+
+  function removeChain(chain: string) {
+    if (hasExternalChainReference(ruleset, table, chain)) {
+      setErrors([t("chainInUse")])
+      return
+    }
+
+    onChange({
+      ...ruleset,
+      policies: ruleset.policies.filter(
+        (policy) => !(policy.table === table && policy.chain === chain)
+      ),
+      filterRules:
+        table === "filter"
+          ? ruleset.filterRules.filter((rule) => rule.chain !== chain)
+          : ruleset.filterRules,
+      natRules:
+        table === "nat"
+          ? ruleset.natRules.filter((rule) => rule.chain !== chain)
+          : ruleset.natRules,
+      rawRules: ruleset.rawRules.filter(
+        (rule) => !(rule.table === table && rule.chain === chain)
+      ),
+    })
+    setErrors([])
+    toast.success(t("toastChainDeleted", { chain }))
+  }
+
+  return (
+    <div className="grid gap-4 rounded-lg border bg-card p-4">
+      <div>
+        <h2 className="text-base font-semibold tracking-normal">
+          {t("customChainsTitle")}
+        </h2>
+        <p className="text-sm text-muted-foreground">
+          {t("customChainsDescription")}
+        </p>
+      </div>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+        <div className="grid flex-1 gap-2">
+          <Label htmlFor={inputId}>{t("fieldNewChain")}</Label>
+          <Input
+            id={inputId}
+            value={chainName}
+            onChange={(event) => setChainName(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault()
+                addChain()
+              }
+            }}
+            placeholder="MYCHAIN"
+          />
+        </div>
+        <Button type="button" onClick={addChain}>
+          <Plus className="size-4" />
+          {t("addChain")}
+        </Button>
+      </div>
+      <ErrorList errors={errors} />
+      {customPolicies.length ? (
+        <div className="flex flex-wrap gap-2">
+          {customPolicies.map((policy) => {
+            const referenced = hasExternalChainReference(
+              ruleset,
+              table,
+              policy.chain
+            )
+            return (
+              <div
+                key={`${policy.table}-${policy.chain}`}
+                className="flex items-center gap-2 rounded-md border bg-background px-3 py-2"
+              >
+                <span className="font-mono text-sm">{policy.chain}</span>
+                <Badge variant="secondary">{t("customChainBadge")}</Badge>
+                <IconButton
+                  label={referenced ? t("chainInUse") : t("deleteChain")}
+                  onClick={() => removeChain(policy.chain)}
+                  disabled={referenced}
+                >
+                  <Trash2 className="size-4" />
+                </IconButton>
+              </div>
+            )
+          })}
+        </div>
+      ) : (
+        <p className="text-sm text-muted-foreground">{t("noCustomChains")}</p>
+      )}
+    </div>
+  )
+}
+
 function NatPanel({
   ruleset,
   onChange,
@@ -1005,10 +1218,25 @@ function NatPanel({
   onChange: (ruleset: Ruleset) => void
 }) {
   const { t } = useI18n()
-  const rows = useMemo(
+  const chains = useMemo(() => tableChainNames(ruleset, "nat"), [ruleset])
+  const [chainFilter, setChainFilter] = useState(ALL_CHAINS_VALUE)
+  const sortedRows = useMemo(
     () => [...ruleset.natRules].sort((a, b) => a.order - b.order),
     [ruleset.natRules]
   )
+  const rows = useMemo(
+    () =>
+      chainFilter === ALL_CHAINS_VALUE
+        ? sortedRows
+        : sortedRows.filter((rule) => rule.chain === chainFilter),
+    [chainFilter, sortedRows]
+  )
+
+  useEffect(() => {
+    if (chainFilter !== ALL_CHAINS_VALUE && !chains.includes(chainFilter)) {
+      setChainFilter(ALL_CHAINS_VALUE)
+    }
+  }, [chainFilter, chains])
 
   const remove = useCallback(
     (rule: NatRule) => {
@@ -1022,8 +1250,15 @@ function NatPanel({
 
   const move = useCallback(
     (rule: NatRule, direction: -1 | 1) => {
-      const index = rows.findIndex((item) => item.id === rule.id)
-      onChange({ ...ruleset, natRules: reorder(rows, index, direction) })
+      onChange({
+        ...ruleset,
+        natRules: moveRuleByVisibleOrder(
+          ruleset.natRules,
+          rows,
+          rule,
+          direction
+        ),
+      })
     },
     [onChange, rows, ruleset]
   )
@@ -1034,6 +1269,11 @@ function NatPanel({
 
   const columns = useMemo<ColumnDef<NatRule>[]>(
     () => [
+      {
+        header: t("columnChain"),
+        accessorKey: "chain",
+        size: 120,
+      },
       {
         header: t("columnType"),
         cell: ({ row }) => (
@@ -1120,18 +1360,34 @@ function NatPanel({
   return (
     <section className="space-y-4">
       <PoliciesEditor ruleset={ruleset} onChange={onChange} table="nat" />
+      <ChainManager ruleset={ruleset} onChange={onChange} table="nat" />
       <div className="grid gap-4 lg:grid-cols-2">
-        <PortForwardForm order={nextOrder(ruleset.natRules)} onAdd={addRule} />
-        <MasqueradeForm order={nextOrder(ruleset.natRules)} onAdd={addRule} />
+        <PortForwardForm
+          chains={chains}
+          order={nextOrder(ruleset.natRules)}
+          onAdd={addRule}
+        />
+        <MasqueradeForm
+          chains={chains}
+          order={nextOrder(ruleset.natRules)}
+          onAdd={addRule}
+        />
       </div>
-      <div className="space-y-3">
-        <div>
-          <h2 className="text-base font-semibold tracking-normal">
-            {t("natRulesTitle")}
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            {t("natRulesDescription")}
-          </p>
+      <div className="grid gap-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h2 className="text-base font-semibold tracking-normal">
+              {t("natRulesTitle")}
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              {t("natRulesDescription")}
+            </p>
+          </div>
+          <ChainFilterSelect
+            value={chainFilter}
+            onValueChange={setChainFilter}
+            chains={chains}
+          />
         </div>
         <DataTable data={rows} columns={columns} empty={t("noNatRules")} />
       </div>
@@ -1205,17 +1461,27 @@ function RawPanel({ ruleset }: { ruleset: Ruleset }) {
 
 function FilterRuleDialog({
   editor,
+  ruleset,
   nextOrderValue,
   onClose,
   onSave,
 }: {
   editor: FilterEditor
+  ruleset: Ruleset
   nextOrderValue: number
   onClose: () => void
   onSave: (rule: FilterRule) => void
 }) {
   const { t, translateValidationMessage } = useI18n()
   const existing = editor?.rule
+  const chainOptions = useMemo(
+    () => tableChainNames(ruleset, "filter"),
+    [ruleset]
+  )
+  const targetOptions = useMemo(
+    () => uniqueStrings([...FILTER_TARGETS, ...chainOptions]),
+    [chainOptions]
+  )
   const [form, setForm] = useState<FilterRuleFormState>({
     chain: existing?.chain ?? "INPUT",
     target: existing?.target ?? "ACCEPT",
@@ -1231,7 +1497,10 @@ function FilterRuleDialog({
   const [errors, setErrors] = useState<string[]>([])
 
   function save() {
-    const parsed = filterRuleSchema.safeParse(form)
+    const parsed = filterRuleSchema({
+      chains: chainOptions,
+      targets: targetOptions,
+    }).safeParse(form)
     if (!parsed.success) {
       setErrors(zodMessages(parsed.error, translateValidationMessage))
       return
@@ -1271,18 +1540,14 @@ function FilterRuleDialog({
           <SelectField
             label={t("fieldChain")}
             value={form.chain}
-            onValueChange={(value) =>
-              setForm({ ...form, chain: value as FilterRule["chain"] })
-            }
-            options={["INPUT", "OUTPUT", "FORWARD"]}
+            onValueChange={(value) => setForm({ ...form, chain: value })}
+            options={chainOptions}
           />
           <SelectField
             label={t("fieldTarget")}
             value={form.target}
-            onValueChange={(value) =>
-              setForm({ ...form, target: value as FilterRule["target"] })
-            }
-            options={["ACCEPT", "DROP", "REJECT"]}
+            onValueChange={(value) => setForm({ ...form, target: value })}
+            options={targetOptions}
           />
           <SelectField
             label={t("fieldProtocol")}
@@ -1359,14 +1624,18 @@ function FilterRuleDialog({
 }
 
 function PortForwardForm({
+  chains,
   order,
   onAdd,
 }: {
+  chains: string[]
   order: number
   onAdd: (rule: NatRule) => void
 }) {
   const { t, translateValidationMessage } = useI18n()
+  const defaultChain = preferredChain(chains, "PREROUTING")
   const [form, setForm] = useState({
+    chain: defaultChain,
     protocol: "tcp",
     listenPort: "",
     destinationIp: "",
@@ -1377,8 +1646,14 @@ function PortForwardForm({
   })
   const [errors, setErrors] = useState<string[]>([])
 
+  useEffect(() => {
+    if (!chains.includes(form.chain)) {
+      setForm((current) => ({ ...current, chain: defaultChain }))
+    }
+  }, [chains, defaultChain, form.chain])
+
   function add() {
-    const parsed = portForwardSchema.safeParse(form)
+    const parsed = portForwardSchema(chains).safeParse(form)
     if (!parsed.success) {
       setErrors(zodMessages(parsed.error, translateValidationMessage))
       return
@@ -1389,7 +1664,7 @@ function PortForwardForm({
       id: newId("nat"),
       type: "port-forward",
       table: "nat",
-      chain: "PREROUTING",
+      chain: value.chain,
       protocol: value.protocol,
       listenPort: value.listenPort,
       destinationIp: value.destinationIp,
@@ -1402,6 +1677,7 @@ function PortForwardForm({
       readOnly: false,
     })
     setForm({
+      chain: defaultChain,
       protocol: "tcp",
       listenPort: "",
       destinationIp: "",
@@ -1425,6 +1701,12 @@ function PortForwardForm({
         </p>
       </div>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        <SelectField
+          label={t("fieldChain")}
+          value={form.chain}
+          onValueChange={(value) => setForm({ ...form, chain: value })}
+          options={chains}
+        />
         <SelectField
           label={t("fieldProtocol")}
           value={form.protocol}
@@ -1481,22 +1763,32 @@ function PortForwardForm({
 }
 
 function MasqueradeForm({
+  chains,
   order,
   onAdd,
 }: {
+  chains: string[]
   order: number
   onAdd: (rule: NatRule) => void
 }) {
   const { t, translateValidationMessage } = useI18n()
+  const defaultChain = preferredChain(chains, "POSTROUTING")
   const [form, setForm] = useState({
+    chain: defaultChain,
     sourceCidr: "",
     outInterface: "",
     comment: "",
   })
   const [errors, setErrors] = useState<string[]>([])
 
+  useEffect(() => {
+    if (!chains.includes(form.chain)) {
+      setForm((current) => ({ ...current, chain: defaultChain }))
+    }
+  }, [chains, defaultChain, form.chain])
+
   function add() {
-    const parsed = masqueradeSchema.safeParse(form)
+    const parsed = masqueradeSchema(chains).safeParse(form)
     if (!parsed.success) {
       setErrors(zodMessages(parsed.error, translateValidationMessage))
       return
@@ -1507,7 +1799,7 @@ function MasqueradeForm({
       id: newId("nat"),
       type: "masquerade",
       table: "nat",
-      chain: "POSTROUTING",
+      chain: value.chain,
       sourceCidr: compact(value.sourceCidr),
       outInterface: compact(value.outInterface),
       comment: compact(value.comment),
@@ -1515,7 +1807,12 @@ function MasqueradeForm({
       order,
       readOnly: false,
     })
-    setForm({ sourceCidr: "", outInterface: "", comment: "" })
+    setForm({
+      chain: defaultChain,
+      sourceCidr: "",
+      outInterface: "",
+      comment: "",
+    })
     setErrors([])
     toast.success(t("toastMasqueradeAdded"))
   }
@@ -1529,6 +1826,12 @@ function MasqueradeForm({
         </p>
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
+        <SelectField
+          label={t("fieldChain")}
+          value={form.chain}
+          onValueChange={(value) => setForm({ ...form, chain: value })}
+          options={chains}
+        />
         <TextField
           label={t("fieldSourceCidr")}
           value={form.sourceCidr}
@@ -1662,6 +1965,42 @@ function SelectField({
             {options.map((option) => (
               <SelectItem key={option} value={option}>
                 {formatOption(option)}
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
+    </div>
+  )
+}
+
+function ChainFilterSelect({
+  value,
+  onValueChange,
+  chains,
+}: {
+  value: string
+  onValueChange: (value: string) => void
+  chains: string[]
+}) {
+  const { t } = useI18n()
+  const id = useMemo(() => newId("chain-filter"), [])
+
+  return (
+    <div className="grid min-w-44 gap-2">
+      <Label htmlFor={id} className="text-xs text-muted-foreground">
+        {t("chainFilterLabel")}
+      </Label>
+      <Select value={value} onValueChange={onValueChange}>
+        <SelectTrigger id={id} className="w-full">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectGroup>
+            <SelectItem value={ALL_CHAINS_VALUE}>{t("allChains")}</SelectItem>
+            {chains.map((chain) => (
+              <SelectItem key={chain} value={chain}>
+                {chain}
               </SelectItem>
             ))}
           </SelectGroup>
@@ -1808,6 +2147,84 @@ function ThemeToggle() {
   )
 }
 
+function tableChainNames(ruleset: Ruleset, table: TableName) {
+  const chains = new Set(BUILT_IN_CHAINS[table])
+  const policies = [...ruleset.policies]
+    .filter((policy) => policy.table === table)
+    .sort((a, b) => a.order - b.order)
+  policies.forEach((policy) => chains.add(policy.chain))
+  return [...chains]
+}
+
+function preferredChain(chains: string[], preferred: string) {
+  return chains.includes(preferred) ? preferred : (chains[0] ?? preferred)
+}
+
+function isBuiltInChain(table: TableName, chain: string) {
+  return BUILT_IN_CHAINS[table].includes(chain)
+}
+
+function uniqueStrings(values: string[]) {
+  return [...new Set(values)]
+}
+
+function moveRuleByVisibleOrder<T extends { id: string; order: number }>(
+  allRules: T[],
+  visibleRows: T[],
+  rule: T,
+  direction: -1 | 1
+) {
+  const index = visibleRows.findIndex((item) => item.id === rule.id)
+  const next = visibleRows[index + direction]
+  if (!next) {
+    return allRules
+  }
+
+  return allRules.map((item) => {
+    if (item.id === rule.id) {
+      return { ...item, order: next.order }
+    }
+
+    if (item.id === next.id) {
+      return { ...item, order: rule.order }
+    }
+
+    return item
+  })
+}
+
+function hasExternalChainReference(
+  ruleset: Ruleset,
+  table: TableName,
+  chain: string
+) {
+  if (
+    table === "filter" &&
+    ruleset.filterRules.some(
+      (rule) => rule.chain !== chain && rule.target === chain
+    )
+  ) {
+    return true
+  }
+
+  return ruleset.rawRules.some(
+    (rule) =>
+      rule.table === table &&
+      rule.chain !== chain &&
+      rawRuleJumpsToChain(rule.line, chain)
+  )
+}
+
+function rawRuleJumpsToChain(line: string, chain: string) {
+  return new RegExp(
+    `(?:^|\\s)(?:-j|--jump)\\s+${escapeRegExp(chain)}(?:\\s|$)`
+  ).test(line)
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
 function stripVolatile(rs: Ruleset) {
   const copy = clone(rs)
   delete copy.raw
@@ -1831,6 +2248,40 @@ function readSessionToken() {
   return window.localStorage.getItem(SESSION_TOKEN_KEY) ?? ""
 }
 
+function errorCopy(t: TFunction): ErrorCopy {
+  return {
+    unknownError: t("unknownError"),
+    snapshotDriftTitle: t("snapshotDriftTitle"),
+    snapshotDriftHint: t("snapshotDriftHint"),
+    useMockModeHint: t("useMockModeHint"),
+  }
+}
+
+function formatErrorDisplay(err: unknown, copy: ErrorCopy): ErrorDisplay {
+  if (isSnapshotDriftError(err)) {
+    return {
+      title: copy.snapshotDriftTitle,
+      description: copy.snapshotDriftHint,
+    }
+  }
+
+  const title = formatError(err, copy.unknownError)
+  if (isCommandsUnavailableError(err)) {
+    return {
+      title,
+      description: copy.useMockModeHint,
+    }
+  }
+
+  return { title }
+}
+
+function errorToastDescription(error: ErrorDisplay) {
+  return error.description
+    ? `${error.title} ${error.description}`
+    : error.title
+}
+
 function formatError(err: unknown, fallback = "Unknown error") {
   if (err instanceof ApiError) {
     return `${err.status}: ${err.message}`
@@ -1841,6 +2292,21 @@ function formatError(err: unknown, fallback = "Unknown error") {
   }
 
   return fallback
+}
+
+function isSnapshotDriftError(err: unknown) {
+  return (
+    err instanceof ApiError &&
+    err.status === 409 &&
+    err.message.includes(SNAPSHOT_DRIFT_MESSAGE)
+  )
+}
+
+function isCommandsUnavailableError(err: unknown) {
+  return (
+    (err instanceof ApiError && err.status === 503) ||
+    (err instanceof Error && err.message.includes(COMMANDS_UNAVAILABLE_MESSAGE))
+  )
 }
 
 function targetTone(target: string): BadgeTone {

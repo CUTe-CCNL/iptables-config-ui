@@ -17,6 +17,9 @@ const zhTW = {
   rollback: "復原",
   shutdown: "關閉",
   useMockModeHint: "本機開發時若無法使用 iptables，請改用模擬模式。",
+  snapshotDriftTitle: "線上規則已變更",
+  snapshotDriftHint:
+    "目前草稿已保留。請重新整理載入最新 iptables 快照，確認差異後再套用。",
   sessionTokenMissingTitle: "缺少工作階段 token",
   sessionTokenMissingDescription:
     "請開啟伺服器輸出的含 token 網址，或先在總覽貼上 token，再修改規則。",
@@ -72,6 +75,8 @@ const zhTW = {
   parserWarningCount: "{count} 個剖析警告",
   unsupportedLinesPreserved: "不支援的行會保留在 Raw 中。",
   columnChain: "鏈",
+  chainFilterLabel: "篩選鏈",
+  allChains: "全部鏈",
   columnTarget: "目標",
   columnMatch: "條件",
   columnComment: "註解",
@@ -81,12 +86,22 @@ const zhTW = {
   editRule: "編輯規則",
   deleteRule: "刪除規則",
   filterRulesTitle: "Filter 規則",
-  filterRulesDescription: "可編輯的 IPv4 INPUT、OUTPUT 與 FORWARD 規則。",
+  filterRulesDescription: "可編輯的 IPv4 filter 內建與自訂鏈規則。",
   addRule: "新增規則",
   noFilterRules: "這個快照沒有可編輯的 filter 規則。",
   defaultPoliciesTitle: "預設政策",
   natPoliciesTitle: "NAT 政策",
   policiesDescription: "套用草稿時會包含 chain policy 行。",
+  customChainsTitle: "自訂鏈",
+  customChainsDescription: "自訂鏈會以 policy '-' 宣告，並可承載結構化規則。",
+  fieldNewChain: "新鏈名稱",
+  addChain: "新增鏈",
+  noCustomChains: "沒有自訂鏈。",
+  customChainBadge: "自訂",
+  deleteChain: "刪除鏈",
+  chainInUse: "鏈仍被其他規則引用",
+  toastChainAdded: "鏈 {chain} 已新增",
+  toastChainDeleted: "鏈 {chain} 已刪除",
   columnType: "類型",
   columnScope: "範圍",
   moveNatRuleUp: "上移 NAT 規則",
@@ -97,7 +112,7 @@ const zhTW = {
   sourceLabel: "來源",
   natRulesTitle: "NAT / 連接埠轉發",
   natRulesDescription:
-    "結構化 PREROUTING DNAT 與 POSTROUTING MASQUERADE 規則。",
+    "結構化 DNAT 與 MASQUERADE 規則，可放在 NAT 內建或自訂鏈。",
   noNatRules: "這個快照沒有可編輯的 NAT 規則。",
   columnTable: "表",
   columnLine: "行",
@@ -110,8 +125,7 @@ const zhTW = {
   noRawSnapshot: "沒有可用的 raw 快照。",
   editFilterRule: "編輯 filter 規則",
   addFilterRule: "新增 filter 規則",
-  filterRuleDialogDescription:
-    "建立 INPUT、OUTPUT 或 FORWARD 的結構化 IPv4 filter 規則。",
+  filterRuleDialogDescription: "建立 filter 內建或自訂鏈的結構化 IPv4 規則。",
   fieldChain: "鏈",
   fieldTarget: "目標",
   fieldProtocol: "協定",
@@ -169,6 +183,10 @@ const zhTW = {
   validationCommentLength: "註解必須為 80 個字元以下",
   validationPortsRequireProtocol: "連接埠需要 tcp 或 udp",
   validationIpv4Address: "請使用 IPv4 位址",
+  validationChainName: "鏈名稱無效",
+  validationChainExists: "鏈已存在",
+  validationUnknownChain: "未知鏈",
+  validationUnknownTarget: "未知目標",
 } as const
 
 const en: Record<keyof typeof zhTW, string> = {
@@ -188,6 +206,9 @@ const en: Record<keyof typeof zhTW, string> = {
   shutdown: "Shutdown",
   useMockModeHint:
     "Use mock mode for local development when iptables is unavailable.",
+  snapshotDriftTitle: "Live rules changed",
+  snapshotDriftHint:
+    "Your draft is still preserved. Refresh to load the latest iptables snapshot, then review and apply again.",
   sessionTokenMissingTitle: "Session token is missing",
   sessionTokenMissingDescription:
     "Open the URL printed by the server with the token query string, or paste the token in Overview before mutating rules.",
@@ -245,6 +266,8 @@ const en: Record<keyof typeof zhTW, string> = {
   parserWarningCount: "{count} parser warning(s)",
   unsupportedLinesPreserved: "Unsupported lines are preserved in Raw.",
   columnChain: "Chain",
+  chainFilterLabel: "Filter chain",
+  allChains: "All chains",
   columnTarget: "Target",
   columnMatch: "Match",
   columnComment: "Comment",
@@ -254,13 +277,25 @@ const en: Record<keyof typeof zhTW, string> = {
   editRule: "Edit rule",
   deleteRule: "Delete rule",
   filterRulesTitle: "Filter Rules",
-  filterRulesDescription: "Editable IPv4 INPUT, OUTPUT, and FORWARD rules.",
+  filterRulesDescription:
+    "Editable IPv4 filter rules for built-in and custom chains.",
   addRule: "Add rule",
   noFilterRules: "No editable filter rules in this snapshot.",
   defaultPoliciesTitle: "Default Policies",
   natPoliciesTitle: "NAT Policies",
   policiesDescription:
     "Chain policy lines are included when applying the draft.",
+  customChainsTitle: "Custom chains",
+  customChainsDescription:
+    "Custom chains are declared with policy '-' and can hold structured rules.",
+  fieldNewChain: "New chain",
+  addChain: "Add chain",
+  noCustomChains: "No custom chains.",
+  customChainBadge: "custom",
+  deleteChain: "Delete chain",
+  chainInUse: "Chain is still referenced by another rule",
+  toastChainAdded: "Chain {chain} added",
+  toastChainDeleted: "Chain {chain} deleted",
   columnType: "Type",
   columnScope: "Scope",
   moveNatRuleUp: "Move NAT rule up",
@@ -271,7 +306,7 @@ const en: Record<keyof typeof zhTW, string> = {
   sourceLabel: "source",
   natRulesTitle: "NAT / Port Forward",
   natRulesDescription:
-    "Structured PREROUTING DNAT and POSTROUTING MASQUERADE rules.",
+    "Structured DNAT and MASQUERADE rules for built-in or custom NAT chains.",
   noNatRules: "No editable NAT rules in this snapshot.",
   columnTable: "Table",
   columnLine: "Line",
@@ -286,7 +321,7 @@ const en: Record<keyof typeof zhTW, string> = {
   editFilterRule: "Edit filter rule",
   addFilterRule: "Add filter rule",
   filterRuleDialogDescription:
-    "Create a structured IPv4 filter rule for INPUT, OUTPUT, or FORWARD.",
+    "Create a structured IPv4 filter rule for a built-in or custom chain.",
   fieldChain: "Chain",
   fieldTarget: "Target",
   fieldProtocol: "Protocol",
@@ -346,6 +381,10 @@ const en: Record<keyof typeof zhTW, string> = {
   validationCommentLength: "Comment must be 80 characters or fewer",
   validationPortsRequireProtocol: "Ports require tcp or udp",
   validationIpv4Address: "Use an IPv4 address",
+  validationChainName: "Invalid chain name",
+  validationChainExists: "Chain already exists",
+  validationUnknownChain: "Unknown chain",
+  validationUnknownTarget: "Unknown target",
 }
 
 const translations = {
@@ -361,6 +400,9 @@ const validationMessageKeys: Record<string, TranslationKey> = {
   "Comment must be 80 characters or fewer": "validationCommentLength",
   "Ports require tcp or udp": "validationPortsRequireProtocol",
   "Use an IPv4 address": "validationIpv4Address",
+  "Invalid chain name": "validationChainName",
+  "Unknown chain": "validationUnknownChain",
+  "Unknown target": "validationUnknownTarget",
 }
 
 export const DEFAULT_LANGUAGE = "zh-TW"

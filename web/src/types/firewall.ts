@@ -25,8 +25,8 @@ export type Policy = {
 export type FilterRule = {
   id: string
   table: "filter"
-  chain: "INPUT" | "OUTPUT" | "FORWARD"
-  target: "ACCEPT" | "DROP" | "REJECT"
+  chain: string
+  target: string
   protocol?: "" | "tcp" | "udp" | "icmp"
   source?: string
   destination?: string
@@ -44,7 +44,7 @@ export type NatRule = {
   id: string
   type: "port-forward" | "masquerade"
   table: "nat"
-  chain: "PREROUTING" | "POSTROUTING"
+  chain: string
   protocol?: "tcp" | "udp" | ""
   listenPort?: string
   destinationIp?: string
