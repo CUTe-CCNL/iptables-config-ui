@@ -32,6 +32,7 @@ import { toast } from "sonner"
 
 import { api, ApiError } from "@/api"
 import { DataTable } from "@/components/data-table"
+import { SortableDataTable } from "@/components/sortable-data-table"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -80,14 +81,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { useTheme } from "@/components/theme-provider"
-import {
-  compact,
-  clone,
-  cn,
-  isEqualJSON,
-  newId,
-  nextOrder,
-} from "@/lib/utils"
+import { compact, clone, cn, isEqualJSON, newId, nextOrder } from "@/lib/utils"
 import { SUPPORTED_LANGUAGES, useI18n, type Language } from "@/lib/i18n"
 import {
   filterRuleSchema,
@@ -897,8 +891,32 @@ function FilterRulesPanel({
     [onChange, rows, ruleset]
   )
 
+  const reorder = useCallback(
+    (activeId: string, overId: string) => {
+      onChange({
+        ...ruleset,
+        filterRules: reorderRulesByVisibleDrop(
+          ruleset.filterRules,
+          rows,
+          activeId,
+          overId
+        ),
+      })
+    },
+    [onChange, rows, ruleset]
+  )
+
   const columns = useMemo<ColumnDef<FilterRule>[]>(
     () => [
+      {
+        header: t("columnOrder"),
+        cell: ({ row }) => (
+          <span className="font-mono text-xs text-muted-foreground">
+            {row.original.order}
+          </span>
+        ),
+        size: 72,
+      },
       {
         header: t("columnChain"),
         accessorKey: "chain",
@@ -991,7 +1009,14 @@ function FilterRulesPanel({
           </Button>
         </div>
       </div>
-      <DataTable data={rows} columns={columns} empty={t("noFilterRules")} />
+      <SortableDataTable
+        data={rows}
+        columns={columns}
+        empty={t("noFilterRules")}
+        dragLabel={t("dragRuleToReorder")}
+        getRowId={(row) => row.id}
+        onReorder={reorder}
+      />
     </section>
   )
 }
@@ -1263,12 +1288,36 @@ function NatPanel({
     [onChange, rows, ruleset]
   )
 
+  const reorder = useCallback(
+    (activeId: string, overId: string) => {
+      onChange({
+        ...ruleset,
+        natRules: reorderRulesByVisibleDrop(
+          ruleset.natRules,
+          rows,
+          activeId,
+          overId
+        ),
+      })
+    },
+    [onChange, rows, ruleset]
+  )
+
   function addRule(rule: NatRule) {
     onChange({ ...ruleset, natRules: [...ruleset.natRules, rule] })
   }
 
   const columns = useMemo<ColumnDef<NatRule>[]>(
     () => [
+      {
+        header: t("columnOrder"),
+        cell: ({ row }) => (
+          <span className="font-mono text-xs text-muted-foreground">
+            {row.original.order}
+          </span>
+        ),
+        size: 72,
+      },
       {
         header: t("columnChain"),
         accessorKey: "chain",
@@ -1389,7 +1438,14 @@ function NatPanel({
             chains={chains}
           />
         </div>
-        <DataTable data={rows} columns={columns} empty={t("noNatRules")} />
+        <SortableDataTable
+          data={rows}
+          columns={columns}
+          empty={t("noNatRules")}
+          dragLabel={t("dragRuleToReorder")}
+          getRowId={(row) => row.id}
+          onReorder={reorder}
+        />
       </div>
     </section>
   )
@@ -1399,6 +1455,15 @@ function RawPanel({ ruleset }: { ruleset: Ruleset }) {
   const { t } = useI18n()
   const columns = useMemo<ColumnDef<RawRule>[]>(
     () => [
+      {
+        header: t("columnOrder"),
+        cell: ({ row }) => (
+          <span className="font-mono text-xs text-muted-foreground">
+            {row.original.order}
+          </span>
+        ),
+        size: 72,
+      },
       { header: t("columnTable"), accessorKey: "table", size: 90 },
       { header: t("columnChain"), accessorKey: "chain", size: 120 },
       {
@@ -2193,6 +2258,32 @@ function moveRuleByVisibleOrder<T extends { id: string; order: number }>(
   })
 }
 
+function reorderRulesByVisibleDrop<T extends { id: string; order: number }>(
+  allRules: T[],
+  visibleRows: T[],
+  activeId: string,
+  overId: string
+) {
+  const activeIndex = visibleRows.findIndex((item) => item.id === activeId)
+  const overIndex = visibleRows.findIndex((item) => item.id === overId)
+  if (activeIndex < 0 || overIndex < 0 || activeIndex === overIndex) {
+    return allRules
+  }
+
+  const reordered = [...visibleRows]
+  const [active] = reordered.splice(activeIndex, 1)
+  reordered.splice(overIndex, 0, active)
+
+  const orderById = new Map(
+    reordered.map((item, index) => [item.id, visibleRows[index].order])
+  )
+
+  return allRules.map((item) => {
+    const order = orderById.get(item.id)
+    return order === undefined ? item : { ...item, order }
+  })
+}
+
 function hasExternalChainReference(
   ruleset: Ruleset,
   table: TableName,
@@ -2277,9 +2368,7 @@ function formatErrorDisplay(err: unknown, copy: ErrorCopy): ErrorDisplay {
 }
 
 function errorToastDescription(error: ErrorDisplay) {
-  return error.description
-    ? `${error.title} ${error.description}`
-    : error.title
+  return error.description ? `${error.title} ${error.description}` : error.title
 }
 
 function formatError(err: unknown, fallback = "Unknown error") {

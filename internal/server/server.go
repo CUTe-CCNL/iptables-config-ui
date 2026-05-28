@@ -37,7 +37,7 @@ func New(cfg Config) http.Handler {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/system", s.handleSystem)
-	mux.HandleFunc("GET /api/rules", s.handleRules)
+	mux.HandleFunc("GET /api/rules", s.withToken(s.handleRules))
 	mux.HandleFunc("POST /api/validate", s.withToken(s.handleValidate))
 	mux.HandleFunc("POST /api/apply", s.withToken(s.handleApply))
 	mux.HandleFunc("POST /api/rollback", s.withToken(s.handleRollback))

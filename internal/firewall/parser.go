@@ -8,7 +8,7 @@ import (
 
 func ParseRuleset(raw string) (Ruleset, error) {
 	rs := Ruleset{
-		SnapshotID: SnapshotID(raw),
+		SnapshotID: rulesetSnapshotID(raw),
 		Raw:        raw,
 	}
 

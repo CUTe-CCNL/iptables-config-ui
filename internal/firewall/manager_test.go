@@ -50,6 +50,22 @@ func TestApplyRejectsSnapshotDrift(t *testing.T) {
 	}
 }
 
+func TestApplyIgnoresSnapshotCounterDrift(t *testing.T) {
+	runner := &fakeRunner{raw: MockRules()}
+	manager := NewManager(runner)
+	rs, err := manager.Rules(context.Background())
+	if err != nil {
+		t.Fatalf("Rules: %v", err)
+	}
+	rs.FilterRules[0].Comment = "changed"
+	runner.raw = stringsReplaceFirst(runner.raw, ":INPUT DROP [0:0]", ":INPUT DROP [12:3456]")
+
+	_, err = manager.Apply(context.Background(), ApplyRequest{SnapshotID: rs.SnapshotID, Ruleset: rs})
+	if err != nil {
+		t.Fatalf("Apply should ignore counter-only live drift, got %v", err)
+	}
+}
+
 func TestApplyFailureRollsBackCurrentRules(t *testing.T) {
 	runner := &fakeRunner{raw: MockRules()}
 	manager := NewManager(runner)

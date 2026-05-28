@@ -75,7 +75,7 @@ func (m *Manager) Apply(ctx context.Context, req ApplyRequest) (Ruleset, error) 
 	if err != nil {
 		return Ruleset{}, err
 	}
-	if SnapshotID(current) != req.SnapshotID {
+	if rulesetSnapshotID(current) != req.SnapshotID {
 		return Ruleset{}, ErrSnapshotDrift
 	}
 	if result := ValidateRuleset(req.Ruleset); !result.Valid {
@@ -87,7 +87,7 @@ func (m *Manager) Apply(ctx context.Context, req ApplyRequest) (Ruleset, error) 
 	}
 
 	m.lastRollbackRaw = current
-	m.lastRollbackID = SnapshotID(current)
+	m.lastRollbackID = rulesetSnapshotID(current)
 	m.lastRollbackUsed = false
 
 	if err := m.runner.Apply(ctx, nextRaw); err != nil {
