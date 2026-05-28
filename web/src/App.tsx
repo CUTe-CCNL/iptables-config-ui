@@ -3,6 +3,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ComponentProps,
   type ErrorInfo,
@@ -66,6 +67,7 @@ import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area"
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -87,6 +89,7 @@ import {
   nextOrder,
   reorder,
 } from "@/lib/utils"
+import { SUPPORTED_LANGUAGES, useI18n, type Language } from "@/lib/i18n"
 import {
   filterRuleSchema,
   masqueradeSchema,
@@ -108,6 +111,7 @@ type ConfirmAction = "apply" | "rollback" | "shutdown" | "refresh" | null
 type FilterEditor = { mode: "create" | "edit"; rule?: FilterRule } | null
 type BadgeTone = "default" | "success" | "warning" | "danger" | "muted"
 type FilterProtocolOption = "any" | "tcp" | "udp" | "icmp"
+type TFunction = ReturnType<typeof useI18n>["t"]
 type FilterRuleFormState = {
   chain: FilterRule["chain"]
   target: FilterRule["target"]
@@ -156,22 +160,30 @@ class AppErrorBoundary extends Component<
 
   render() {
     if (this.state.error) {
-      return (
-        <main className="min-h-svh bg-background p-4">
-          <Alert variant="destructive" className="mx-auto max-w-3xl">
-            <AlertTriangle className="size-4" />
-            <AlertTitle>UI render failed</AlertTitle>
-            <AlertDescription>{this.state.error.message}</AlertDescription>
-          </Alert>
-        </main>
-      )
+      return <AppErrorFallback error={this.state.error} />
     }
 
     return this.props.children
   }
 }
 
+function AppErrorFallback({ error }: { error: Error }) {
+  const { t } = useI18n()
+
+  return (
+    <main className="min-h-svh bg-background p-4">
+      <Alert variant="destructive" className="mx-auto max-w-3xl">
+        <AlertTriangle className="size-4" />
+        <AlertTitle>{t("appRenderFailed")}</AlertTitle>
+        <AlertDescription>{error.message}</AlertDescription>
+      </Alert>
+    </main>
+  )
+}
+
 function FirewallApp() {
+  const { t } = useI18n()
+  const unknownErrorRef = useRef(t("unknownError"))
   const [system, setSystem] = useState<SystemStatus | null>(null)
   const [rules, setRules] = useState<Ruleset | null>(null)
   const [draft, setDraft] = useState<Ruleset | null>(null)
@@ -209,6 +221,10 @@ function FirewallApp() {
   const canMutate = Boolean(draft && rules && token && !loading && !busy)
   const canValidate = Boolean(draft && token && !loading && !busy)
 
+  useEffect(() => {
+    unknownErrorRef.current = t("unknownError")
+  }, [t])
+
   const boot = useCallback(async () => {
     setLoading(true)
     setError(null)
@@ -223,7 +239,7 @@ function FirewallApp() {
       setRules(response.ruleset)
       setDraft(clone(response.ruleset))
     } catch (err) {
-      const message = formatError(err)
+      const message = formatError(err, unknownErrorRef.current)
       setError(message)
       setDraft(clone(emptyRuleset))
     } finally {
@@ -248,13 +264,13 @@ function FirewallApp() {
       setSystem(status)
       setRules(response.ruleset)
       setDraft(clone(response.ruleset))
-      toast.success("Rules refreshed", {
-        description: "Loaded the current live iptables snapshot.",
+      toast.success(t("toastRulesRefreshedTitle"), {
+        description: t("toastRulesRefreshedDescription"),
       })
     } catch (err) {
-      const message = formatError(err)
+      const message = formatError(err, t("unknownError"))
       setError(message)
-      toast.error("Refresh failed", { description: message })
+      toast.error(t("toastRefreshFailedTitle"), { description: message })
     } finally {
       setBusy(false)
     }
@@ -268,20 +284,20 @@ function FirewallApp() {
     try {
       const validation = await api.validate(token, draft)
       if (!validation.valid) {
-        toast.warning("Draft is invalid", {
+        toast.warning(t("toastDraftInvalidTitle"), {
           description: validation.errors.join(" "),
         })
         return false
       }
 
-      toast.success("Draft is valid", {
-        description: "The server accepted the current ruleset.",
+      toast.success(t("toastDraftValidTitle"), {
+        description: t("toastDraftValidDescription"),
       })
       return true
     } catch (err) {
-      const message = formatError(err)
+      const message = formatError(err, t("unknownError"))
       setError(message)
-      toast.error("Validation failed", { description: message })
+      toast.error(t("toastValidationFailedTitle"), { description: message })
       return false
     } finally {
       setBusy(false)
@@ -306,7 +322,7 @@ function FirewallApp() {
       if (action === "apply") {
         const validation = await api.validate(token, draft)
         if (!validation.valid) {
-          toast.warning("Draft is invalid", {
+          toast.warning(t("toastDraftInvalidTitle"), {
             description: validation.errors.join(" "),
           })
           return
@@ -315,8 +331,8 @@ function FirewallApp() {
         const response = await api.apply(token, rules.snapshotId, draft)
         setRules(response.ruleset)
         setDraft(clone(response.ruleset))
-        toast.success("Rules applied", {
-          description: "Live iptables rules were updated.",
+        toast.success(t("toastRulesAppliedTitle"), {
+          description: t("toastRulesAppliedDescription"),
         })
       }
 
@@ -324,21 +340,21 @@ function FirewallApp() {
         const response = await api.rollback(token)
         setRules(response.ruleset)
         setDraft(clone(response.ruleset))
-        toast.success("Rollback restored", {
-          description: "The previous in-memory snapshot is active again.",
+        toast.success(t("toastRollbackRestoredTitle"), {
+          description: t("toastRollbackRestoredDescription"),
         })
       }
 
       if (action === "shutdown") {
         await api.shutdown(token)
-        toast.success("Server shutting down", {
-          description: "The local Go service accepted the shutdown request.",
+        toast.success(t("toastServerShuttingDownTitle"), {
+          description: t("toastServerShuttingDownDescription"),
         })
       }
     } catch (err) {
-      const message = formatError(err)
+      const message = formatError(err, t("unknownError"))
       setError(message)
-      toast.error(actionTitle(action), { description: message })
+      toast.error(actionTitle(action, t), { description: message })
     } finally {
       setBusy(false)
       setConfirmAction(null)
@@ -364,34 +380,35 @@ function FirewallApp() {
               <p className="truncate text-sm text-muted-foreground">
                 {system
                   ? `${system.host} / ${system.user}`
-                  : "Loading host status"}
+                  : t("loadingHostStatus")}
               </p>
             </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge tone={system?.mock ? "warning" : "success"}>
-              {system?.mock ? "Mock mode" : "Live mode"}
+              {system?.mock ? t("modeMock") : t("modeLive")}
             </StatusBadge>
             <StatusBadge tone={system?.root ? "success" : "warning"}>
-              {system?.root ? "root" : "non-root"}
+              {system?.root ? t("rootUser") : t("nonRootUser")}
             </StatusBadge>
             <StatusBadge tone={commandsMissing ? "danger" : "success"}>
-              {commandsMissing ? "commands missing" : "commands ready"}
+              {commandsMissing ? t("commandsMissing") : t("commandsReady")}
             </StatusBadge>
             <StatusBadge tone={pending ? "warning" : "muted"}>
-              {pendingCount} pending
+              {t("pendingCount", { count: pendingCount })}
             </StatusBadge>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <LanguageSelect />
             <Button
               variant="outline"
               onClick={() => void refreshRules(false)}
               disabled={busy || loading}
             >
               <RefreshCw className={cn("size-4", busy && "animate-spin")} />
-              Refresh
+              {t("refresh")}
             </Button>
             <Button
               variant="secondary"
@@ -399,7 +416,7 @@ function FirewallApp() {
               disabled={!canValidate}
             >
               <ClipboardCheck className="size-4" />
-              Validate
+              {t("validate")}
             </Button>
             <Button
               className="bg-emerald-600 text-white hover:bg-emerald-700 dark:bg-emerald-600 dark:hover:bg-emerald-500"
@@ -407,7 +424,7 @@ function FirewallApp() {
               disabled={!canMutate || !pending}
             >
               <Save className="size-4" />
-              Apply
+              {t("apply")}
             </Button>
             <Button
               variant="outline"
@@ -415,7 +432,7 @@ function FirewallApp() {
               disabled={!canMutate}
             >
               <RotateCcw className="size-4" />
-              Rollback
+              {t("rollback")}
             </Button>
             <Button
               variant="destructive"
@@ -423,7 +440,7 @@ function FirewallApp() {
               disabled={!token || busy}
             >
               <Power className="size-4" />
-              Shutdown
+              {t("shutdown")}
             </Button>
             <ThemeToggle />
           </div>
@@ -441,19 +458,16 @@ function FirewallApp() {
           <Alert variant="destructive">
             <AlertTriangle className="size-4" />
             <AlertTitle>{error}</AlertTitle>
-            <AlertDescription>
-              Use mock mode for local development when iptables is unavailable.
-            </AlertDescription>
+            <AlertDescription>{t("useMockModeHint")}</AlertDescription>
           </Alert>
         ) : null}
 
         {!token ? (
           <Alert className="border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
             <AlertTriangle className="size-4" />
-            <AlertTitle>Session token is missing</AlertTitle>
+            <AlertTitle>{t("sessionTokenMissingTitle")}</AlertTitle>
             <AlertDescription className="text-amber-800 dark:text-amber-200">
-              Open the URL printed by the server with the token query string, or
-              paste the token in Overview before mutating rules.
+              {t("sessionTokenMissingDescription")}
             </AlertDescription>
           </Alert>
         ) : null}
@@ -463,10 +477,10 @@ function FirewallApp() {
           onValueChange={(value) => setActiveTab(value as Tab)}
         >
           <TabsList className="w-full justify-start overflow-x-auto">
-            <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="filter">Filter</TabsTrigger>
-            <TabsTrigger value="nat">NAT</TabsTrigger>
-            <TabsTrigger value="raw">Raw</TabsTrigger>
+            <TabsTrigger value="overview">{t("tabOverview")}</TabsTrigger>
+            <TabsTrigger value="filter">{t("tabFilter")}</TabsTrigger>
+            <TabsTrigger value="nat">{t("tabNat")}</TabsTrigger>
+            <TabsTrigger value="raw">{t("tabRaw")}</TabsTrigger>
           </TabsList>
 
           <TabsContent value="overview" className="mt-4">
@@ -530,7 +544,9 @@ function FirewallApp() {
             updateDraft({ ...draft, filterRules })
             setFilterEditor(null)
             toast.success(
-              filterEditor?.mode === "edit" ? "Rule updated" : "Rule added"
+              filterEditor?.mode === "edit"
+                ? t("toastRuleUpdated")
+                : t("toastRuleAdded")
             )
           }}
         />
@@ -559,16 +575,25 @@ function StatusCards({
   draft: Ruleset | null
   pendingCount: number
 }) {
+  const { t } = useI18n()
   const items = [
-    { label: "Listen address", value: system?.addr ?? "127.0.0.1:8921" },
     {
-      label: "Snapshot",
-      value: rules?.snapshotId ? rules.snapshotId.slice(0, 12) : "unavailable",
+      label: t("statusListenAddress"),
+      value: system?.addr ?? "127.0.0.1:8921",
     },
-    { label: "Filter rules", value: String(draft?.filterRules.length ?? 0) },
-    { label: "NAT rules", value: String(draft?.natRules.length ?? 0) },
-    { label: "Raw lines", value: String(draft?.rawRules.length ?? 0) },
-    { label: "Pending changes", value: String(pendingCount) },
+    {
+      label: t("statusSnapshot"),
+      value: rules?.snapshotId
+        ? rules.snapshotId.slice(0, 12)
+        : t("unavailable"),
+    },
+    {
+      label: t("statusFilterRules"),
+      value: String(draft?.filterRules.length ?? 0),
+    },
+    { label: t("statusNatRules"), value: String(draft?.natRules.length ?? 0) },
+    { label: t("statusRawLines"), value: String(draft?.rawRules.length ?? 0) },
+    { label: t("statusPendingChanges"), value: String(pendingCount) },
   ]
 
   return (
@@ -623,6 +648,7 @@ function SessionTokenCard({
   token: string
   onTokenChange: (token: string) => void
 }) {
+  const { t } = useI18n()
   const [value, setValue] = useState(token)
 
   function saveToken() {
@@ -630,41 +656,41 @@ function SessionTokenCard({
     onTokenChange(next)
     if (next) {
       window.localStorage.setItem(SESSION_TOKEN_KEY, next)
-      toast.success("Session token saved")
+      toast.success(t("toastSessionTokenSaved"))
       return
     }
 
     window.localStorage.removeItem(SESSION_TOKEN_KEY)
-    toast.info("Session token cleared")
+    toast.info(t("toastSessionTokenCleared"))
   }
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Session</CardTitle>
-        <CardDescription>Token-protected API actions</CardDescription>
+        <CardTitle>{t("sessionTitle")}</CardTitle>
+        <CardDescription>{t("sessionDescription")}</CardDescription>
         <CardAction>
           <StatusBadge tone={token ? "success" : "warning"}>
-            {token ? "ready" : "missing"}
+            {token ? t("ready") : t("missing")}
           </StatusBadge>
         </CardAction>
       </CardHeader>
       <CardContent className="grid gap-3 sm:grid-cols-[1fr_auto]">
         <div className="grid gap-2">
-          <Label htmlFor="session-token">Session token</Label>
+          <Label htmlFor="session-token">{t("sessionTokenLabel")}</Label>
           <Input
             id="session-token"
             type="password"
             value={value}
             onChange={(event) => setValue(event.target.value)}
-            placeholder="Paste token from server log"
+            placeholder={t("sessionTokenPlaceholder")}
             autoComplete="off"
           />
         </div>
         <div className="flex items-end">
           <Button onClick={saveToken} className="w-full sm:w-auto">
             <Save className="size-4" />
-            Save
+            {t("save")}
           </Button>
         </div>
       </CardContent>
@@ -673,11 +699,13 @@ function SessionTokenCard({
 }
 
 function CapabilitiesCard({ system }: { system: SystemStatus | null }) {
+  const { t } = useI18n()
+
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Capabilities</CardTitle>
-        <CardDescription>Server-reported firewall features</CardDescription>
+        <CardTitle>{t("capabilitiesTitle")}</CardTitle>
+        <CardDescription>{t("capabilitiesDescription")}</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-wrap gap-2">
         {(system?.capabilities ?? []).length ? (
@@ -688,7 +716,7 @@ function CapabilitiesCard({ system }: { system: SystemStatus | null }) {
           ))
         ) : (
           <span className="text-sm text-muted-foreground">
-            No capabilities reported.
+            {t("noCapabilities")}
           </span>
         )}
       </CardContent>
@@ -697,11 +725,13 @@ function CapabilitiesCard({ system }: { system: SystemStatus | null }) {
 }
 
 function CommandStatusCard({ commands }: { commands: CommandStatus[] }) {
+  const { t } = useI18n()
+
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Commands</CardTitle>
-        <CardDescription>Host iptables tool availability</CardDescription>
+        <CardTitle>{t("commandsTitle")}</CardTitle>
+        <CardDescription>{t("commandsDescription")}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         {commands.length ? (
@@ -713,17 +743,17 @@ function CommandStatusCard({ commands }: { commands: CommandStatus[] }) {
               <div className="min-w-0">
                 <div className="font-medium">{command.name}</div>
                 <div className="truncate font-mono text-xs text-muted-foreground">
-                  {command.path || command.error || "not found"}
+                  {command.path || command.error || t("notFound")}
                 </div>
               </div>
               <StatusBadge tone={command.available ? "success" : "danger"}>
-                {command.available ? "available" : "missing"}
+                {command.available ? t("available") : t("missing")}
               </StatusBadge>
             </div>
           ))
         ) : (
           <div className="text-sm text-muted-foreground">
-            No command status loaded.
+            {t("noCommandStatus")}
           </div>
         )}
       </CardContent>
@@ -732,27 +762,36 @@ function CommandStatusCard({ commands }: { commands: CommandStatus[] }) {
 }
 
 function DraftSummaryCard({ draft }: { draft: Ruleset | null }) {
+  const { t } = useI18n()
   const warnings = draft?.warnings ?? []
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Draft</CardTitle>
-        <CardDescription>Current editable ruleset</CardDescription>
+        <CardTitle>{t("draftTitle")}</CardTitle>
+        <CardDescription>{t("draftDescription")}</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-3">
         <div className="grid grid-cols-2 gap-2 text-sm">
-          <SummaryItem label="Policies" value={draft?.policies.length ?? 0} />
-          <SummaryItem label="Filter" value={draft?.filterRules.length ?? 0} />
-          <SummaryItem label="NAT" value={draft?.natRules.length ?? 0} />
-          <SummaryItem label="Raw" value={draft?.rawRules.length ?? 0} />
+          <SummaryItem
+            label={t("policies")}
+            value={draft?.policies.length ?? 0}
+          />
+          <SummaryItem
+            label={t("filter")}
+            value={draft?.filterRules.length ?? 0}
+          />
+          <SummaryItem label={t("nat")} value={draft?.natRules.length ?? 0} />
+          <SummaryItem label={t("raw")} value={draft?.rawRules.length ?? 0} />
         </div>
         {warnings.length ? (
           <Alert className="border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
             <AlertTriangle className="size-4" />
-            <AlertTitle>{warnings.length} parser warning(s)</AlertTitle>
+            <AlertTitle>
+              {t("parserWarningCount", { count: warnings.length })}
+            </AlertTitle>
             <AlertDescription className="text-amber-800 dark:text-amber-200">
-              Unsupported lines are preserved in Raw.
+              {t("unsupportedLinesPreserved")}
             </AlertDescription>
           </Alert>
         ) : null}
@@ -781,6 +820,7 @@ function FilterRulesPanel({
   onCreate: () => void
   onEdit: (rule: FilterRule) => void
 }) {
+  const { t } = useI18n()
   const rows = useMemo(
     () => [...ruleset.filterRules].sort((a, b) => a.order - b.order),
     [ruleset.filterRules]
@@ -807,12 +847,12 @@ function FilterRulesPanel({
   const columns = useMemo<ColumnDef<FilterRule>[]>(
     () => [
       {
-        header: "Chain",
+        header: t("columnChain"),
         accessorKey: "chain",
         size: 90,
       },
       {
-        header: "Target",
+        header: t("columnTarget"),
         cell: ({ row }) => (
           <StatusBadge tone={targetTone(row.original.target)}>
             {row.original.target}
@@ -821,11 +861,11 @@ function FilterRulesPanel({
         size: 96,
       },
       {
-        header: "Match",
+        header: t("columnMatch"),
         cell: ({ row }) => <RuleMatch rule={row.original} />,
       },
       {
-        header: "Comment",
+        header: t("columnComment"),
         cell: ({ row }) => (
           <span className="font-mono text-xs text-muted-foreground">
             {row.original.comment || "-"}
@@ -833,33 +873,33 @@ function FilterRulesPanel({
         ),
       },
       {
-        header: "Actions",
+        header: t("columnActions"),
         cell: ({ row }) => {
           const index = rows.findIndex((item) => item.id === row.original.id)
           return (
             <div className="flex items-center justify-end gap-1">
               <IconButton
-                label="Move rule up"
+                label={t("moveRuleUp")}
                 onClick={() => move(row.original, -1)}
                 disabled={index <= 0}
               >
                 <ChevronUp className="size-4" />
               </IconButton>
               <IconButton
-                label="Move rule down"
+                label={t("moveRuleDown")}
                 onClick={() => move(row.original, 1)}
                 disabled={index >= rows.length - 1}
               >
                 <ChevronDown className="size-4" />
               </IconButton>
               <IconButton
-                label="Edit rule"
+                label={t("editRule")}
                 onClick={() => onEdit(row.original)}
               >
                 <Edit3 className="size-4" />
               </IconButton>
               <IconButton
-                label="Delete rule"
+                label={t("deleteRule")}
                 onClick={() => remove(row.original)}
               >
                 <Trash2 className="size-4" />
@@ -870,7 +910,7 @@ function FilterRulesPanel({
         size: 180,
       },
     ],
-    [move, onEdit, remove, rows]
+    [move, onEdit, remove, rows, t]
   )
 
   return (
@@ -879,22 +919,18 @@ function FilterRulesPanel({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-base font-semibold tracking-normal">
-            Filter Rules
+            {t("filterRulesTitle")}
           </h2>
           <p className="text-sm text-muted-foreground">
-            Editable IPv4 INPUT, OUTPUT, and FORWARD rules.
+            {t("filterRulesDescription")}
           </p>
         </div>
         <Button onClick={onCreate}>
           <Plus className="size-4" />
-          Add rule
+          {t("addRule")}
         </Button>
       </div>
-      <DataTable
-        data={rows}
-        columns={columns}
-        empty="No editable filter rules in this snapshot."
-      />
+      <DataTable data={rows} columns={columns} empty={t("noFilterRules")} />
     </section>
   )
 }
@@ -908,6 +944,7 @@ function PoliciesEditor({
   onChange: (ruleset: Ruleset) => void
   table: "filter" | "nat"
 }) {
+  const { t } = useI18n()
   const policies = [...ruleset.policies]
     .filter((policy) => policy.table === table)
     .sort((a, b) => a.order - b.order)
@@ -927,10 +964,12 @@ function PoliciesEditor({
     <div className="grid gap-3 rounded-lg border bg-card p-4">
       <div>
         <h2 className="text-base font-semibold tracking-normal">
-          {table === "filter" ? "Default Policies" : "NAT Policies"}
+          {table === "filter"
+            ? t("defaultPoliciesTitle")
+            : t("natPoliciesTitle")}
         </h2>
         <p className="text-sm text-muted-foreground">
-          Chain policy lines are included when applying the draft.
+          {t("policiesDescription")}
         </p>
       </div>
       <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-4">
@@ -945,8 +984,10 @@ function PoliciesEditor({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="ACCEPT">ACCEPT</SelectItem>
-                <SelectItem value="DROP">DROP</SelectItem>
+                <SelectGroup>
+                  <SelectItem value="ACCEPT">ACCEPT</SelectItem>
+                  <SelectItem value="DROP">DROP</SelectItem>
+                </SelectGroup>
               </SelectContent>
             </Select>
           </div>
@@ -963,6 +1004,7 @@ function NatPanel({
   ruleset: Ruleset
   onChange: (ruleset: Ruleset) => void
 }) {
+  const { t } = useI18n()
   const rows = useMemo(
     () => [...ruleset.natRules].sort((a, b) => a.order - b.order),
     [ruleset.natRules]
@@ -993,18 +1035,20 @@ function NatPanel({
   const columns = useMemo<ColumnDef<NatRule>[]>(
     () => [
       {
-        header: "Type",
+        header: t("columnType"),
         cell: ({ row }) => (
           <StatusBadge
             tone={row.original.type === "port-forward" ? "warning" : "success"}
           >
-            {row.original.type}
+            {row.original.type === "port-forward"
+              ? t("portForwardTitle")
+              : "MASQUERADE"}
           </StatusBadge>
         ),
         size: 130,
       },
       {
-        header: "Match",
+        header: t("columnMatch"),
         cell: ({ row }) =>
           row.original.type === "port-forward" ? (
             <span className="font-mono text-xs">
@@ -1013,13 +1057,13 @@ function NatPanel({
             </span>
           ) : (
             <span className="font-mono text-xs">
-              source {row.original.sourceCidr || "any"} -&gt;{" "}
-              {row.original.outInterface || "any iface"}
+              {t("sourceLabel")} {row.original.sourceCidr || t("any")} -&gt;{" "}
+              {row.original.outInterface || t("anyInterface")}
             </span>
           ),
       },
       {
-        header: "Scope",
+        header: t("columnScope"),
         cell: ({ row }) => (
           <span className="font-mono text-xs text-muted-foreground">
             {row.original.inInterface ? `in:${row.original.inInterface} ` : ""}
@@ -1031,7 +1075,7 @@ function NatPanel({
         ),
       },
       {
-        header: "Comment",
+        header: t("columnComment"),
         cell: ({ row }) => (
           <span className="font-mono text-xs text-muted-foreground">
             {row.original.comment || "-"}
@@ -1039,27 +1083,27 @@ function NatPanel({
         ),
       },
       {
-        header: "Actions",
+        header: t("columnActions"),
         cell: ({ row }) => {
           const index = rows.findIndex((item) => item.id === row.original.id)
           return (
             <div className="flex items-center justify-end gap-1">
               <IconButton
-                label="Move NAT rule up"
+                label={t("moveNatRuleUp")}
                 onClick={() => move(row.original, -1)}
                 disabled={index <= 0}
               >
                 <ChevronUp className="size-4" />
               </IconButton>
               <IconButton
-                label="Move NAT rule down"
+                label={t("moveNatRuleDown")}
                 onClick={() => move(row.original, 1)}
                 disabled={index >= rows.length - 1}
               >
                 <ChevronDown className="size-4" />
               </IconButton>
               <IconButton
-                label="Delete NAT rule"
+                label={t("deleteNatRule")}
                 onClick={() => remove(row.original)}
               >
                 <Trash2 className="size-4" />
@@ -1070,7 +1114,7 @@ function NatPanel({
         size: 146,
       },
     ],
-    [move, remove, rows]
+    [move, remove, rows, t]
   )
 
   return (
@@ -1083,29 +1127,26 @@ function NatPanel({
       <div className="space-y-3">
         <div>
           <h2 className="text-base font-semibold tracking-normal">
-            NAT / Port Forward
+            {t("natRulesTitle")}
           </h2>
           <p className="text-sm text-muted-foreground">
-            Structured PREROUTING DNAT and POSTROUTING MASQUERADE rules.
+            {t("natRulesDescription")}
           </p>
         </div>
-        <DataTable
-          data={rows}
-          columns={columns}
-          empty="No editable NAT rules in this snapshot."
-        />
+        <DataTable data={rows} columns={columns} empty={t("noNatRules")} />
       </div>
     </section>
   )
 }
 
 function RawPanel({ ruleset }: { ruleset: Ruleset }) {
+  const { t } = useI18n()
   const columns = useMemo<ColumnDef<RawRule>[]>(
     () => [
-      { header: "Table", accessorKey: "table", size: 90 },
-      { header: "Chain", accessorKey: "chain", size: 120 },
+      { header: t("columnTable"), accessorKey: "table", size: 90 },
+      { header: t("columnChain"), accessorKey: "chain", size: 120 },
       {
-        header: "Line",
+        header: t("columnLine"),
         cell: ({ row }) => (
           <code className="block min-w-80 font-mono text-xs whitespace-nowrap">
             {row.original.line}
@@ -1113,7 +1154,7 @@ function RawPanel({ ruleset }: { ruleset: Ruleset }) {
         ),
       },
       {
-        header: "Reason",
+        header: t("columnReason"),
         cell: ({ row }) => (
           <span className="text-sm text-muted-foreground">
             {row.original.reason}
@@ -1121,7 +1162,7 @@ function RawPanel({ ruleset }: { ruleset: Ruleset }) {
         ),
       },
     ],
-    []
+    [t]
   )
 
   const rawRows = [...ruleset.rawRules].sort(
@@ -1133,29 +1174,27 @@ function RawPanel({ ruleset }: { ruleset: Ruleset }) {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-base font-semibold tracking-normal">
-            Raw / Read-only
+            {t("rawTitle")}
           </h2>
-          <p className="text-sm text-muted-foreground">
-            Unsupported rules are preserved during apply and shown for review.
-          </p>
+          <p className="text-sm text-muted-foreground">{t("rawDescription")}</p>
         </div>
         <StatusBadge tone="muted">
-          {ruleset.rawRules.length} read-only
+          {t("readOnlyCount", { count: ruleset.rawRules.length })}
         </StatusBadge>
       </div>
       <DataTable
         data={rawRows}
         columns={columns}
-        empty="No unsupported rules detected."
+        empty={t("noUnsupportedRules")}
       />
       <div className="grid gap-2">
         <div className="flex items-center gap-2 text-sm font-medium">
           <Terminal className="size-4" />
-          iptables-save snapshot
+          {t("rawSnapshotTitle")}
         </div>
         <ScrollArea className="h-[420px] rounded-lg border bg-zinc-950 p-3 text-zinc-50">
           <pre className="min-w-max font-mono text-xs leading-relaxed">
-            {ruleset.raw || "No raw snapshot available."}
+            {ruleset.raw || t("noRawSnapshot")}
           </pre>
           <ScrollBar orientation="horizontal" />
         </ScrollArea>
@@ -1175,6 +1214,7 @@ function FilterRuleDialog({
   onClose: () => void
   onSave: (rule: FilterRule) => void
 }) {
+  const { t, translateValidationMessage } = useI18n()
   const existing = editor?.rule
   const [form, setForm] = useState<FilterRuleFormState>({
     chain: existing?.chain ?? "INPUT",
@@ -1193,7 +1233,7 @@ function FilterRuleDialog({
   function save() {
     const parsed = filterRuleSchema.safeParse(form)
     if (!parsed.success) {
-      setErrors(zodMessages(parsed.error))
+      setErrors(zodMessages(parsed.error, translateValidationMessage))
       return
     }
 
@@ -1221,15 +1261,15 @@ function FilterRuleDialog({
       <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>
-            {editor?.mode === "edit" ? "Edit filter rule" : "Add filter rule"}
+            {editor?.mode === "edit" ? t("editFilterRule") : t("addFilterRule")}
           </DialogTitle>
           <DialogDescription>
-            Create a structured IPv4 filter rule for INPUT, OUTPUT, or FORWARD.
+            {t("filterRuleDialogDescription")}
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <SelectField
-            label="Chain"
+            label={t("fieldChain")}
             value={form.chain}
             onValueChange={(value) =>
               setForm({ ...form, chain: value as FilterRule["chain"] })
@@ -1237,7 +1277,7 @@ function FilterRuleDialog({
             options={["INPUT", "OUTPUT", "FORWARD"]}
           />
           <SelectField
-            label="Target"
+            label={t("fieldTarget")}
             value={form.target}
             onValueChange={(value) =>
               setForm({ ...form, target: value as FilterRule["target"] })
@@ -1245,7 +1285,7 @@ function FilterRuleDialog({
             options={["ACCEPT", "DROP", "REJECT"]}
           />
           <SelectField
-            label="Protocol"
+            label={t("fieldProtocol")}
             value={form.protocol}
             onValueChange={(value) =>
               setForm({
@@ -1254,60 +1294,63 @@ function FilterRuleDialog({
               })
             }
             options={["any", "tcp", "udp", "icmp"]}
+            formatOption={(option) =>
+              option === "any" ? t("optionAny") : option
+            }
           />
           <TextField
-            label="Source"
+            label={t("fieldSource")}
             value={form.source}
             onChange={(value) => setForm({ ...form, source: value })}
             placeholder="10.0.0.0/24"
           />
           <TextField
-            label="Destination"
+            label={t("fieldDestination")}
             value={form.destination}
             onChange={(value) => setForm({ ...form, destination: value })}
             placeholder="192.168.1.10"
           />
           <TextField
-            label="Input interface"
+            label={t("fieldInputInterface")}
             value={form.inInterface}
             onChange={(value) => setForm({ ...form, inInterface: value })}
             placeholder="eth0"
           />
           <TextField
-            label="Output interface"
+            label={t("fieldOutputInterface")}
             value={form.outInterface}
             onChange={(value) => setForm({ ...form, outInterface: value })}
             placeholder="eth1"
           />
           <TextField
-            label="Source port"
+            label={t("fieldSourcePort")}
             value={form.sourcePort}
             onChange={(value) => setForm({ ...form, sourcePort: value })}
             inputMode="numeric"
           />
           <TextField
-            label="Destination port"
+            label={t("fieldDestinationPort")}
             value={form.destinationPort}
             onChange={(value) => setForm({ ...form, destinationPort: value })}
             inputMode="numeric"
           />
           <div className="sm:col-span-2 lg:col-span-3">
             <TextField
-              label="Comment"
+              label={t("fieldComment")}
               value={form.comment}
               onChange={(value) => setForm({ ...form, comment: value })}
-              placeholder="SSH admin"
+              placeholder={t("commentPlaceholder")}
             />
           </div>
         </div>
         <ErrorList errors={errors} />
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
-            Cancel
+            {t("cancel")}
           </Button>
           <Button onClick={save}>
             <Save className="size-4" />
-            Save rule
+            {t("saveRule")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1322,6 +1365,7 @@ function PortForwardForm({
   order: number
   onAdd: (rule: NatRule) => void
 }) {
+  const { t, translateValidationMessage } = useI18n()
   const [form, setForm] = useState({
     protocol: "tcp",
     listenPort: "",
@@ -1336,7 +1380,7 @@ function PortForwardForm({
   function add() {
     const parsed = portForwardSchema.safeParse(form)
     if (!parsed.success) {
-      setErrors(zodMessages(parsed.error))
+      setErrors(zodMessages(parsed.error, translateValidationMessage))
       return
     }
 
@@ -1367,22 +1411,22 @@ function PortForwardForm({
       comment: "",
     })
     setErrors([])
-    toast.success("Port forward added")
+    toast.success(t("toastPortForwardAdded"))
   }
 
   return (
     <div className="grid gap-4 rounded-lg border bg-card p-4">
       <div>
         <h2 className="text-base font-semibold tracking-normal">
-          Port forward
+          {t("portForwardTitle")}
         </h2>
         <p className="text-sm text-muted-foreground">
-          DNAT into an internal host.
+          {t("portForwardDescription")}
         </p>
       </div>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         <SelectField
-          label="Protocol"
+          label={t("fieldProtocol")}
           value={form.protocol}
           onValueChange={(value) =>
             setForm({ ...form, protocol: value as "tcp" | "udp" })
@@ -1390,38 +1434,38 @@ function PortForwardForm({
           options={["tcp", "udp"]}
         />
         <TextField
-          label="Listen port"
+          label={t("fieldListenPort")}
           value={form.listenPort}
           onChange={(value) => setForm({ ...form, listenPort: value })}
           inputMode="numeric"
         />
         <TextField
-          label="Destination IP"
+          label={t("fieldDestinationIp")}
           value={form.destinationIp}
           onChange={(value) => setForm({ ...form, destinationIp: value })}
           placeholder="10.0.0.20"
         />
         <TextField
-          label="Destination port"
+          label={t("fieldDestinationPort")}
           value={form.destinationPort}
           onChange={(value) => setForm({ ...form, destinationPort: value })}
           inputMode="numeric"
         />
         <TextField
-          label="Source CIDR"
+          label={t("fieldSourceCidr")}
           value={form.sourceCidr}
           onChange={(value) => setForm({ ...form, sourceCidr: value })}
-          placeholder="optional"
+          placeholder={t("optionalPlaceholder")}
         />
         <TextField
-          label="Input interface"
+          label={t("fieldInputInterface")}
           value={form.inInterface}
           onChange={(value) => setForm({ ...form, inInterface: value })}
-          placeholder="optional"
+          placeholder={t("optionalPlaceholder")}
         />
       </div>
       <TextField
-        label="Comment"
+        label={t("fieldComment")}
         value={form.comment}
         onChange={(value) => setForm({ ...form, comment: value })}
       />
@@ -1429,7 +1473,7 @@ function PortForwardForm({
       <div>
         <Button onClick={add}>
           <Plus className="size-4" />
-          Add forward
+          {t("addForward")}
         </Button>
       </div>
     </div>
@@ -1443,6 +1487,7 @@ function MasqueradeForm({
   order: number
   onAdd: (rule: NatRule) => void
 }) {
+  const { t, translateValidationMessage } = useI18n()
   const [form, setForm] = useState({
     sourceCidr: "",
     outInterface: "",
@@ -1453,7 +1498,7 @@ function MasqueradeForm({
   function add() {
     const parsed = masqueradeSchema.safeParse(form)
     if (!parsed.success) {
-      setErrors(zodMessages(parsed.error))
+      setErrors(zodMessages(parsed.error, translateValidationMessage))
       return
     }
 
@@ -1472,7 +1517,7 @@ function MasqueradeForm({
     })
     setForm({ sourceCidr: "", outInterface: "", comment: "" })
     setErrors([])
-    toast.success("MASQUERADE rule added")
+    toast.success(t("toastMasqueradeAdded"))
   }
 
   return (
@@ -1480,25 +1525,25 @@ function MasqueradeForm({
       <div>
         <h2 className="text-base font-semibold tracking-normal">MASQUERADE</h2>
         <p className="text-sm text-muted-foreground">
-          Source NAT for egress traffic.
+          {t("masqueradeDescription")}
         </p>
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
         <TextField
-          label="Source CIDR"
+          label={t("fieldSourceCidr")}
           value={form.sourceCidr}
           onChange={(value) => setForm({ ...form, sourceCidr: value })}
           placeholder="10.0.0.0/24"
         />
         <TextField
-          label="Output interface"
+          label={t("fieldOutputInterface")}
           value={form.outInterface}
           onChange={(value) => setForm({ ...form, outInterface: value })}
           placeholder="eth0"
         />
       </div>
       <TextField
-        label="Comment"
+        label={t("fieldComment")}
         value={form.comment}
         onChange={(value) => setForm({ ...form, comment: value })}
       />
@@ -1506,7 +1551,7 @@ function MasqueradeForm({
       <div>
         <Button variant="secondary" onClick={add}>
           <Plus className="size-4" />
-          Add masquerade
+          {t("addMasquerade")}
         </Button>
       </div>
     </div>
@@ -1524,7 +1569,8 @@ function ConfirmActionDialog({
   onCancel: () => void
   onConfirm: () => void
 }) {
-  const meta = confirmMeta(action)
+  const { t } = useI18n()
+  const meta = confirmMeta(action, t)
 
   return (
     <AlertDialog
@@ -1542,7 +1588,7 @@ function ConfirmActionDialog({
           <AlertDialogDescription>{meta.description}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+          <AlertDialogCancel disabled={busy}>{t("cancel")}</AlertDialogCancel>
           <Button
             variant={action === "shutdown" ? "destructive" : "default"}
             onClick={onConfirm}
@@ -1594,11 +1640,13 @@ function SelectField({
   value,
   onValueChange,
   options,
+  formatOption = (option) => option,
 }: {
   label: string
   value: string
   onValueChange: (value: string) => void
   options: string[]
+  formatOption?: (option: string) => string
 }) {
   const id = useMemo(() => newId("select"), [])
 
@@ -1610,11 +1658,13 @@ function SelectField({
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          {options.map((option) => (
-            <SelectItem key={option} value={option}>
-              {option}
-            </SelectItem>
-          ))}
+          <SelectGroup>
+            {options.map((option) => (
+              <SelectItem key={option} value={option}>
+                {formatOption(option)}
+              </SelectItem>
+            ))}
+          </SelectGroup>
         </SelectContent>
       </Select>
     </div>
@@ -1622,12 +1672,14 @@ function SelectField({
 }
 
 function ErrorList({ errors }: { errors: string[] }) {
+  const { t } = useI18n()
+
   if (!errors.length) return null
 
   return (
     <Alert variant="destructive">
       <AlertTriangle className="size-4" />
-      <AlertTitle>Fix validation errors</AlertTitle>
+      <AlertTitle>{t("fixValidationErrors")}</AlertTitle>
       <AlertDescription>
         <ul className="mt-2 list-disc space-y-1 pl-4">
           {errors.map((error, index) => (
@@ -1640,8 +1692,9 @@ function ErrorList({ errors }: { errors: string[] }) {
 }
 
 function RuleMatch({ rule }: { rule: FilterRule }) {
+  const { t } = useI18n()
   const parts = [
-    rule.protocol ? `proto:${rule.protocol}` : "proto:any",
+    rule.protocol ? `proto:${rule.protocol}` : `proto:${t("any")}`,
     rule.source ? `src:${rule.source}` : "",
     rule.destination ? `dst:${rule.destination}` : "",
     rule.inInterface ? `in:${rule.inInterface}` : "",
@@ -1712,13 +1765,42 @@ function IconButton({
   )
 }
 
+function LanguageSelect() {
+  const { language, setLanguage, t } = useI18n()
+
+  return (
+    <Select
+      value={language}
+      onValueChange={(value) => setLanguage(value as Language)}
+    >
+      <SelectTrigger
+        size="sm"
+        className="w-[8.5rem]"
+        aria-label={t("languageSelectorLabel")}
+      >
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectGroup>
+          {SUPPORTED_LANGUAGES.map((item) => (
+            <SelectItem key={item.code} value={item.code}>
+              {item.label}
+            </SelectItem>
+          ))}
+        </SelectGroup>
+      </SelectContent>
+    </Select>
+  )
+}
+
 function ThemeToggle() {
   const { theme, setTheme } = useTheme()
+  const { t } = useI18n()
   const isDark = theme === "dark"
 
   return (
     <IconButton
-      label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+      label={isDark ? t("switchToLightMode") : t("switchToDarkMode")}
       onClick={() => setTheme(isDark ? "light" : "dark")}
     >
       {isDark ? <Sun className="size-4" /> : <Moon className="size-4" />}
@@ -1749,7 +1831,7 @@ function readSessionToken() {
   return window.localStorage.getItem(SESSION_TOKEN_KEY) ?? ""
 }
 
-function formatError(err: unknown) {
+function formatError(err: unknown, fallback = "Unknown error") {
   if (err instanceof ApiError) {
     return `${err.status}: ${err.message}`
   }
@@ -1758,7 +1840,7 @@ function formatError(err: unknown) {
     return err.message
   }
 
-  return "Unknown error"
+  return fallback
 }
 
 function targetTone(target: string): BadgeTone {
@@ -1767,55 +1849,52 @@ function targetTone(target: string): BadgeTone {
   return "warning"
 }
 
-function confirmMeta(action: ConfirmAction) {
+function confirmMeta(action: ConfirmAction, t: TFunction) {
   if (action === "apply") {
     return {
-      title: "Apply firewall draft",
-      description:
-        "This replaces live IPv4 iptables rules with the current draft. The server keeps one in-memory rollback snapshot while this process is running.",
-      confirmLabel: "Apply rules",
+      title: t("confirmApplyTitle"),
+      description: t("confirmApplyDescription"),
+      confirmLabel: t("confirmApplyLabel"),
     }
   }
 
   if (action === "rollback") {
     return {
-      title: "Rollback last apply",
-      description:
-        "This restores the in-memory snapshot captured before the last successful apply.",
-      confirmLabel: "Rollback",
+      title: t("confirmRollbackTitle"),
+      description: t("confirmRollbackDescription"),
+      confirmLabel: t("confirmRollbackLabel"),
     }
   }
 
   if (action === "shutdown") {
     return {
-      title: "Shutdown local server",
-      description: "This stops the Go process serving the UI and firewall API.",
-      confirmLabel: "Shutdown",
+      title: t("confirmShutdownTitle"),
+      description: t("confirmShutdownDescription"),
+      confirmLabel: t("confirmShutdownLabel"),
     }
   }
 
   if (action === "refresh") {
     return {
-      title: "Discard draft changes",
-      description:
-        "Refreshing will discard the current draft and load a fresh snapshot from live iptables.",
-      confirmLabel: "Discard and refresh",
+      title: t("confirmRefreshTitle"),
+      description: t("confirmRefreshDescription"),
+      confirmLabel: t("confirmRefreshLabel"),
     }
   }
 
   return {
-    title: "Confirm action",
+    title: t("confirmActionTitle"),
     description: "",
-    confirmLabel: "Confirm",
+    confirmLabel: t("confirmActionLabel"),
   }
 }
 
-function actionTitle(action: ConfirmAction) {
-  if (action === "apply") return "Apply failed"
-  if (action === "rollback") return "Rollback failed"
-  if (action === "shutdown") return "Shutdown failed"
-  if (action === "refresh") return "Refresh failed"
-  return "Action failed"
+function actionTitle(action: ConfirmAction, t: TFunction) {
+  if (action === "apply") return t("applyFailed")
+  if (action === "rollback") return t("rollbackFailed")
+  if (action === "shutdown") return t("shutdownFailed")
+  if (action === "refresh") return t("toastRefreshFailedTitle")
+  return t("actionFailed")
 }
 
 export default App

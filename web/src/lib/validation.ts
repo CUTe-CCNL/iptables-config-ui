@@ -105,6 +105,9 @@ export const masqueradeSchema = z.object({
     .default(""),
 })
 
-export function zodMessages(error: z.ZodError) {
-  return error.issues.map((issue) => issue.message)
+export function zodMessages(
+  error: z.ZodError,
+  translateMessage: (message: string) => string = (message) => message
+) {
+  return error.issues.map((issue) => translateMessage(issue.message))
 }
