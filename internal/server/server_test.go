@@ -28,6 +28,7 @@ func TestMutatingEndpointsRequireToken(t *testing.T) {
 func TestMockModeReturnsRules(t *testing.T) {
 	handler := testHandler(firewall.NewMockRunner(), "secret")
 	req := httptest.NewRequest(http.MethodGet, "/api/rules", nil)
+	req.Header.Set("X-Session-Token", "secret")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -58,6 +59,7 @@ func TestSystemDoesNotExposeSessionToken(t *testing.T) {
 func TestMissingIptablesReturnsUnavailable(t *testing.T) {
 	handler := testHandler(unavailableRunner{}, "secret")
 	req := httptest.NewRequest(http.MethodGet, "/api/rules", nil)
+	req.Header.Set("X-Session-Token", "secret")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)

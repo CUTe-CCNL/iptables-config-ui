@@ -45,8 +45,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   system: async () =>
     normalizeSystemStatus(await request<SystemStatus>("/api/system")),
-  rules: async () =>
-    normalizeRulesResponse(await request<RulesResponse>("/api/rules")),
+  rules: async (token: string) =>
+    normalizeRulesResponse(
+      await request<RulesResponse>("/api/rules", {
+        headers: { "X-Session-Token": token },
+      })
+    ),
   validate: async (token: string, ruleset: Ruleset) =>
     normalizeValidationResult(
       await request<ValidationResult>("/api/validate", {

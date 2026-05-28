@@ -246,7 +246,13 @@ function FirewallApp() {
       const status = await api.system()
       setSystem(status)
 
-      const response = await api.rules()
+      if (!sessionToken) {
+        setRules(null)
+        setDraft(clone(emptyRuleset))
+        return
+      }
+
+      const response = await api.rules(sessionToken)
       setRules(response.ruleset)
       setDraft(clone(response.ruleset))
     } catch (err) {
@@ -270,7 +276,10 @@ function FirewallApp() {
     setBusy(true)
     setError(null)
     try {
-      const [status, response] = await Promise.all([api.system(), api.rules()])
+      const [status, response] = await Promise.all([
+        api.system(),
+        api.rules(token),
+      ])
       setSystem(status)
       setRules(response.ruleset)
       setDraft(clone(response.ruleset))
