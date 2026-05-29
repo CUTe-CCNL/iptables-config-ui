@@ -102,7 +102,14 @@ import type {
 type Tab = "overview" | "filter" | "nat" | "raw"
 type TableName = "filter" | "nat"
 type ConfirmAction = "apply" | "rollback" | "shutdown" | "refresh" | null
-type FilterEditor = { mode: "create" | "edit"; rule?: FilterRule } | null
+type FilterEditor =
+  | { mode: "create"; initialChain?: string }
+  | { mode: "edit"; rule: FilterRule }
+  | null
+type NatEditor =
+  | { mode: "create"; initialChain?: string }
+  | { mode: "edit"; rule: NatRule }
+  | null
 type BadgeTone = "default" | "success" | "warning" | "danger" | "muted"
 type FilterProtocolOption = "any" | "tcp" | "udp" | "icmp"
 type TFunction = ReturnType<typeof useI18n>["t"]
@@ -123,6 +130,17 @@ type FilterRuleFormState = {
   outInterface: string
   sourcePort: string
   destinationPort: string
+  comment: string
+}
+type NatRuleFormState = {
+  chain: NatRule["chain"]
+  protocol: "tcp" | "udp"
+  listenPort: string
+  destinationIp: string
+  destinationPort: string
+  sourceCidr: string
+  inInterface: string
+  outInterface: string
   comment: string
 }
 
@@ -204,6 +222,7 @@ function FirewallApp() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<ErrorDisplay | null>(null)
   const [filterEditor, setFilterEditor] = useState<FilterEditor>(null)
+  const [natEditor, setNatEditor] = useState<NatEditor>(null)
   const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null)
 
   const pending = useMemo(() => {
@@ -396,84 +415,101 @@ function FirewallApp() {
     setDraft(next)
   }
 
+  const filterDialogKey =
+    filterEditor?.mode === "edit"
+      ? filterEditor.rule.id
+      : filterEditor?.mode === "create"
+        ? (filterEditor.initialChain ?? filterEditor.mode)
+        : "filter-dialog-closed"
+  const natDialogKey =
+    natEditor?.mode === "edit"
+      ? natEditor.rule.id
+      : natEditor?.mode === "create"
+        ? (natEditor.initialChain ?? natEditor.mode)
+        : "nat-dialog-closed"
+
   return (
     <main className="min-h-svh bg-background text-foreground">
       <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-4 p-3 sm:p-4 lg:p-6">
-        <header className="flex flex-col gap-3 border-b pb-4 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-              <Shield className="size-5" />
-            </div>
-            <div className="min-w-0">
-              <h1 className="truncate text-lg font-semibold tracking-normal">
-                iptables Config UI
-              </h1>
-              <p className="truncate text-sm text-muted-foreground">
-                {system
-                  ? `${system.host} / ${system.user}`
-                  : t("loadingHostStatus")}
-              </p>
-            </div>
-          </div>
+        <header className="sticky top-0 z-20 -mx-3 border-b bg-background/95 px-3 py-3 backdrop-blur sm:-mx-4 sm:px-4 lg:-mx-6 lg:px-6">
+          <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center">
+            <div className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-center">
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+                  <Shield className="size-5" />
+                </div>
+                <div className="min-w-0">
+                  <h1 className="truncate text-lg font-semibold tracking-normal">
+                    iptables Config UI
+                  </h1>
+                  <p className="truncate text-sm text-muted-foreground">
+                    {system
+                      ? `${system.host} / ${system.user}`
+                      : t("loadingHostStatus")}
+                  </p>
+                </div>
+              </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <StatusBadge tone={system?.mock ? "warning" : "success"}>
-              {system?.mock ? t("modeMock") : t("modeLive")}
-            </StatusBadge>
-            <StatusBadge tone={system?.root ? "success" : "warning"}>
-              {system?.root ? t("rootUser") : t("nonRootUser")}
-            </StatusBadge>
-            <StatusBadge tone={commandsMissing ? "danger" : "success"}>
-              {commandsMissing ? t("commandsMissing") : t("commandsReady")}
-            </StatusBadge>
-            <StatusBadge tone={pending ? "warning" : "muted"}>
-              {t("pendingCount", { count: pendingCount })}
-            </StatusBadge>
-          </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <StatusBadge tone={system?.mock ? "warning" : "success"}>
+                  {system?.mock ? t("modeMock") : t("modeLive")}
+                </StatusBadge>
+                <StatusBadge tone={system?.root ? "success" : "warning"}>
+                  {system?.root ? t("rootUser") : t("nonRootUser")}
+                </StatusBadge>
+                <StatusBadge tone={commandsMissing ? "danger" : "success"}>
+                  {commandsMissing ? t("commandsMissing") : t("commandsReady")}
+                </StatusBadge>
+                <StatusBadge tone={pending ? "warning" : "muted"}>
+                  {t("pendingCount", { count: pendingCount })}
+                </StatusBadge>
+              </div>
+            </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <LanguageSelect />
-            <Button
-              variant="outline"
-              onClick={() => void refreshRules(false)}
-              disabled={busy || loading}
-            >
-              <RefreshCw className={cn("size-4", busy && "animate-spin")} />
-              {t("refresh")}
-            </Button>
-            <Button
-              variant="secondary"
-              onClick={() => void validateDraft()}
-              disabled={!canValidate}
-            >
-              <ClipboardCheck className="size-4" />
-              {t("validate")}
-            </Button>
-            <Button
-              className="bg-emerald-600 text-white hover:bg-emerald-700 dark:bg-emerald-600 dark:hover:bg-emerald-500"
-              onClick={() => setConfirmAction("apply")}
-              disabled={!canMutate || !pending}
-            >
-              <Save className="size-4" />
-              {t("apply")}
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => setConfirmAction("rollback")}
-              disabled={!canMutate}
-            >
-              <RotateCcw className="size-4" />
-              {t("rollback")}
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => setConfirmAction("shutdown")}
-              disabled={!token || busy}
-            >
-              <Power className="size-4" />
-              {t("shutdown")}
-            </Button>
-            <ThemeToggle />
+            <div className="flex flex-wrap items-center gap-2 xl:justify-end">
+              <LanguageSelect />
+              <Button
+                variant="outline"
+                onClick={() => void refreshRules(false)}
+                disabled={busy || loading}
+              >
+                <RefreshCw className={cn("size-4", busy && "animate-spin")} />
+                {t("refresh")}
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => void validateDraft()}
+                disabled={!canValidate}
+              >
+                <ClipboardCheck className="size-4" />
+                {t("validate")}
+              </Button>
+              <Button
+                className="bg-emerald-600 text-white hover:bg-emerald-700 dark:bg-emerald-600 dark:hover:bg-emerald-500"
+                onClick={() => setConfirmAction("apply")}
+                disabled={!canMutate || !pending}
+              >
+                <Save className="size-4" />
+                {t("apply")}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => setConfirmAction("rollback")}
+                disabled={!canMutate}
+              >
+                <RotateCcw className="size-4" />
+                {t("rollback")}
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={() => setConfirmAction("shutdown")}
+                disabled={!token || busy}
+              >
+                <Power className="size-4" />
+                {t("shutdown")}
+              </Button>
+              <ThemeToggle />
+            </div>
           </div>
         </header>
 
@@ -509,7 +545,7 @@ function FirewallApp() {
           value={activeTab}
           onValueChange={(value) => setActiveTab(value as Tab)}
         >
-          <TabsList className="w-full justify-start overflow-x-auto">
+          <TabsList className="w-full justify-start overflow-hidden border-b">
             <TabsTrigger value="overview">{t("tabOverview")}</TabsTrigger>
             <TabsTrigger value="filter">{t("tabFilter")}</TabsTrigger>
             <TabsTrigger value="nat">{t("tabNat")}</TabsTrigger>
@@ -536,7 +572,9 @@ function FirewallApp() {
               <FilterRulesPanel
                 ruleset={draft}
                 onChange={updateDraft}
-                onCreate={() => setFilterEditor({ mode: "create" })}
+                onCreate={(initialChain) =>
+                  setFilterEditor({ mode: "create", initialChain })
+                }
                 onEdit={(rule) => setFilterEditor({ mode: "edit", rule })}
               />
             ) : null}
@@ -546,7 +584,14 @@ function FirewallApp() {
             {loading ? (
               <LoadingPanel />
             ) : draft ? (
-              <NatPanel ruleset={draft} onChange={updateDraft} />
+              <NatPanel
+                ruleset={draft}
+                onChange={updateDraft}
+                onCreate={(initialChain) =>
+                  setNatEditor({ mode: "create", initialChain })
+                }
+                onEdit={(rule) => setNatEditor({ mode: "edit", rule })}
+              />
             ) : null}
           </TabsContent>
 
@@ -560,7 +605,7 @@ function FirewallApp() {
         </Tabs>
 
         <FilterRuleDialog
-          key={filterEditor?.rule?.id ?? filterEditor?.mode ?? "closed"}
+          key={filterDialogKey}
           editor={filterEditor}
           ruleset={draft ?? emptyRuleset}
           nextOrderValue={nextOrder(draft?.filterRules ?? [])}
@@ -581,6 +626,32 @@ function FirewallApp() {
               filterEditor?.mode === "edit"
                 ? t("toastRuleUpdated")
                 : t("toastRuleAdded")
+            )
+          }}
+        />
+
+        <NatRuleDialog
+          key={natDialogKey}
+          editor={natEditor}
+          ruleset={draft ?? emptyRuleset}
+          nextOrderValue={nextOrder(draft?.natRules ?? [])}
+          onClose={() => setNatEditor(null)}
+          onSave={(rule) => {
+            if (!draft) return
+
+            const natRules =
+              natEditor?.mode === "edit"
+                ? draft.natRules.map((item) =>
+                    item.id === rule.id ? rule : item
+                  )
+                : [...draft.natRules, rule]
+
+            updateDraft({ ...draft, natRules })
+            setNatEditor(null)
+            toast.success(
+              natEditor?.mode === "edit"
+                ? t("toastNatRuleUpdated")
+                : t("toastNatRuleAdded")
             )
           }}
         />
@@ -851,7 +922,7 @@ function FilterRulesPanel({
 }: {
   ruleset: Ruleset
   onChange: (ruleset: Ruleset) => void
-  onCreate: () => void
+  onCreate: (initialChain?: string) => void
   onEdit: (rule: FilterRule) => void
 }) {
   const { t } = useI18n()
@@ -861,12 +932,29 @@ function FilterRulesPanel({
     () => [...ruleset.filterRules].sort((a, b) => a.order - b.order),
     [ruleset.filterRules]
   )
-  const rows = useMemo(
+  const chainSections = useMemo(
     () =>
-      chainFilter === ALL_CHAINS_VALUE
-        ? sortedRows
-        : sortedRows.filter((rule) => rule.chain === chainFilter),
-    [chainFilter, sortedRows]
+      chains.map((chain) => ({
+        chain,
+        builtIn: isBuiltInChain("filter", chain),
+        count: sortedRows.filter((rule) => rule.chain === chain).length,
+        policy: policyForChain(ruleset, "filter", chain),
+        rows: sortedRows.filter((rule) => rule.chain === chain),
+      })),
+    [chains, ruleset, sortedRows]
+  )
+  const visibleSections = useMemo(
+    () => {
+      if (chainFilter !== ALL_CHAINS_VALUE) {
+        return chainSections.filter((section) => section.chain === chainFilter)
+      }
+
+      const populatedSections = chainSections.filter(
+        (section) => section.count > 0
+      )
+      return populatedSections.length ? populatedSections : chainSections
+    },
+    [chainFilter, chainSections]
   )
 
   useEffect(() => {
@@ -886,37 +974,37 @@ function FilterRulesPanel({
   )
 
   const move = useCallback(
-    (rule: FilterRule, direction: -1 | 1) => {
+    (rule: FilterRule, direction: -1 | 1, visibleRows: FilterRule[]) => {
       onChange({
         ...ruleset,
         filterRules: moveRuleByVisibleOrder(
           ruleset.filterRules,
-          rows,
+          visibleRows,
           rule,
           direction
         ),
       })
     },
-    [onChange, rows, ruleset]
+    [onChange, ruleset]
   )
 
   const reorder = useCallback(
-    (activeId: string, overId: string) => {
+    (activeId: string, overId: string, visibleRows: FilterRule[]) => {
       onChange({
         ...ruleset,
         filterRules: reorderRulesByVisibleDrop(
           ruleset.filterRules,
-          rows,
+          visibleRows,
           activeId,
           overId
         ),
       })
     },
-    [onChange, rows, ruleset]
+    [onChange, ruleset]
   )
 
-  const columns = useMemo<ColumnDef<FilterRule>[]>(
-    () => [
+  const columnsForRows = useCallback(
+    (sectionRows: FilterRule[]): ColumnDef<FilterRule>[] => [
       {
         header: t("columnOrder"),
         cell: ({ row }) => (
@@ -925,11 +1013,6 @@ function FilterRulesPanel({
           </span>
         ),
         size: 72,
-      },
-      {
-        header: t("columnChain"),
-        accessorKey: "chain",
-        size: 90,
       },
       {
         header: t("columnTarget"),
@@ -955,20 +1038,22 @@ function FilterRulesPanel({
       {
         header: t("columnActions"),
         cell: ({ row }) => {
-          const index = rows.findIndex((item) => item.id === row.original.id)
+          const index = sectionRows.findIndex(
+            (item) => item.id === row.original.id
+          )
           return (
             <div className="flex items-center justify-end gap-1">
               <IconButton
                 label={t("moveRuleUp")}
-                onClick={() => move(row.original, -1)}
+                onClick={() => move(row.original, -1, sectionRows)}
                 disabled={index <= 0}
               >
                 <ChevronUp className="size-4" />
               </IconButton>
               <IconButton
                 label={t("moveRuleDown")}
-                onClick={() => move(row.original, 1)}
-                disabled={index >= rows.length - 1}
+                onClick={() => move(row.original, 1, sectionRows)}
+                disabled={index >= sectionRows.length - 1}
               >
                 <ChevronDown className="size-4" />
               </IconButton>
@@ -990,43 +1075,215 @@ function FilterRulesPanel({
         size: 180,
       },
     ],
-    [move, onEdit, remove, rows, t]
+    [move, onEdit, remove, t]
   )
 
   return (
-    <section className="space-y-4">
-      <PoliciesEditor ruleset={ruleset} onChange={onChange} table="filter" />
-      <ChainManager ruleset={ruleset} onChange={onChange} table="filter" />
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h2 className="text-base font-semibold tracking-normal">
-            {t("filterRulesTitle")}
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            {t("filterRulesDescription")}
-          </p>
-        </div>
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+    <section className="grid items-start gap-4 xl:grid-cols-[15rem_minmax(0,1fr)_20rem]">
+      <ChainNavigation
+        title={t("chainDirectory")}
+        description={t("chainDirectoryDescription")}
+        items={chainSections}
+        activeValue={chainFilter}
+        allCount={sortedRows.length}
+        onValueChange={setChainFilter}
+      />
+
+      <div className="grid min-w-0 content-start gap-4 self-start">
+        <div className="rounded-lg border bg-card p-3 xl:hidden">
           <ChainFilterSelect
             value={chainFilter}
             onValueChange={setChainFilter}
             chains={chains}
           />
-          <Button onClick={onCreate}>
+        </div>
+
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h2 className="text-base font-semibold tracking-normal">
+              {t("filterRulesTitle")}
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              {t("filterRulesDescription")}
+            </p>
+          </div>
+          <Button
+            onClick={() =>
+              onCreate(
+                chainFilter === ALL_CHAINS_VALUE ? undefined : chainFilter
+              )
+            }
+          >
             <Plus className="size-4" />
             {t("addRule")}
           </Button>
         </div>
+
+        <div className="grid gap-4">
+          {visibleSections.map((section) => (
+            <section
+              key={section.chain}
+              className="overflow-hidden rounded-lg border bg-card"
+            >
+              <div className="flex flex-col gap-3 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="font-mono text-base font-semibold tracking-normal">
+                      {section.chain}
+                    </h3>
+                    <Badge variant="secondary">
+                      {section.builtIn
+                        ? t("builtInChain")
+                        : t("customChainBadge")}
+                    </Badge>
+                    <StatusBadge
+                      tone={section.policy === "DROP" ? "danger" : "muted"}
+                    >
+                      {t("policyLabel")}: {section.policy}
+                    </StatusBadge>
+                  </div>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {t("chainRuleCount", { count: section.count })}
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onCreate(section.chain)}
+                >
+                  <Plus className="size-4" />
+                  {t("addRule")}
+                </Button>
+              </div>
+              <div className="p-3">
+                {section.rows.length ? (
+                  <SortableDataTable
+                    data={section.rows}
+                    columns={columnsForRows(section.rows)}
+                    empty={t("noRulesInChain")}
+                    dragLabel={t("dragRuleToReorder")}
+                    getRowId={(row) => row.id}
+                    onReorder={(activeId, overId) =>
+                      reorder(activeId, overId, section.rows)
+                    }
+                    ariaLabel={`${section.chain} ${t("filterRulesTitle")}`}
+                    density="compact"
+                  />
+                ) : (
+                  <ChainEmptyState
+                    message={t("noRulesInChain")}
+                    actionLabel={t("addRule")}
+                    onAction={() => onCreate(section.chain)}
+                  />
+                )}
+              </div>
+            </section>
+          ))}
+        </div>
       </div>
-      <SortableDataTable
-        data={rows}
-        columns={columns}
-        empty={t("noFilterRules")}
-        dragLabel={t("dragRuleToReorder")}
-        getRowId={(row) => row.id}
-        onReorder={reorder}
-      />
+
+      <aside className="order-first grid gap-4 self-start xl:order-none xl:sticky xl:top-28">
+        <div className="rounded-lg border bg-card p-4">
+          <h2 className="text-base font-semibold tracking-normal">
+            {t("tableToolsTitle")}
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            {t("tableToolsDescription")}
+          </p>
+        </div>
+        <PoliciesEditor ruleset={ruleset} onChange={onChange} table="filter" />
+        <ChainManager ruleset={ruleset} onChange={onChange} table="filter" />
+      </aside>
     </section>
+  )
+}
+
+function ChainNavigation({
+  title,
+  description,
+  items,
+  activeValue,
+  allCount,
+  onValueChange,
+}: {
+  title: string
+  description: string
+  items: {
+    chain: string
+    builtIn: boolean
+    count: number
+    rawCount?: number
+  }[]
+  activeValue: string
+  allCount: number
+  onValueChange: (value: string) => void
+}) {
+  const { t } = useI18n()
+
+  return (
+    <aside className="hidden xl:block">
+      <div className="sticky top-28 grid gap-3 rounded-lg border bg-card p-3">
+        <div>
+          <h2 className="text-base font-semibold tracking-normal">{title}</h2>
+          <p className="text-sm text-muted-foreground">{description}</p>
+        </div>
+        <div className="grid gap-1">
+          <Button
+            type="button"
+            variant={activeValue === ALL_CHAINS_VALUE ? "secondary" : "ghost"}
+            className="h-auto min-h-8 w-full justify-between gap-2 px-2 py-2 text-left"
+            onClick={() => onValueChange(ALL_CHAINS_VALUE)}
+          >
+            <span className="truncate">{t("allChains")}</span>
+            <Badge variant="secondary">{allCount}</Badge>
+          </Button>
+          {items.map((item) => (
+            <Button
+              key={item.chain}
+              type="button"
+              variant={activeValue === item.chain ? "secondary" : "ghost"}
+              className="h-auto min-h-9 w-full justify-between gap-2 px-2 py-2 text-left"
+              onClick={() => onValueChange(item.chain)}
+            >
+              <span className="grid min-w-0 gap-0.5">
+                <span className="truncate font-mono">{item.chain}</span>
+                <span className="truncate text-xs text-muted-foreground">
+                  {item.builtIn ? t("builtInChain") : t("customChainBadge")}
+                </span>
+              </span>
+              <span className="flex shrink-0 items-center gap-1">
+                <Badge variant="secondary">{item.count}</Badge>
+                {item.rawCount ? (
+                  <Badge variant="outline">{item.rawCount}</Badge>
+                ) : null}
+              </span>
+            </Button>
+          ))}
+        </div>
+      </div>
+    </aside>
+  )
+}
+
+function ChainEmptyState({
+  message,
+  actionLabel,
+  onAction,
+}: {
+  message: string
+  actionLabel?: string
+  onAction?: () => void
+}) {
+  return (
+    <div className="flex min-h-28 flex-col items-center justify-center gap-3 rounded-lg border border-dashed bg-muted/20 px-4 py-6 text-center">
+      <p className="max-w-sm text-sm text-muted-foreground">{message}</p>
+      {actionLabel && onAction ? (
+        <Button type="button" variant="outline" size="sm" onClick={onAction}>
+          <Plus className="size-4" />
+          {actionLabel}
+        </Button>
+      ) : null}
+    </div>
   )
 }
 
@@ -1069,7 +1326,7 @@ function PoliciesEditor({
           {t("policiesDescription")}
         </p>
       </div>
-      <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
         {policies.map((policy) => (
           <div key={`${policy.table}-${policy.chain}`} className="grid gap-2">
             <Label>{policy.chain}</Label>
@@ -1247,9 +1504,13 @@ function ChainManager({
 function NatPanel({
   ruleset,
   onChange,
+  onCreate,
+  onEdit,
 }: {
   ruleset: Ruleset
   onChange: (ruleset: Ruleset) => void
+  onCreate: (initialChain?: string) => void
+  onEdit: (rule: NatRule) => void
 }) {
   const { t } = useI18n()
   const chains = useMemo(() => tableChainNames(ruleset, "nat"), [ruleset])
@@ -1258,12 +1519,43 @@ function NatPanel({
     () => [...ruleset.natRules].sort((a, b) => a.order - b.order),
     [ruleset.natRules]
   )
-  const rows = useMemo(
+  const rawRows = useMemo(
     () =>
-      chainFilter === ALL_CHAINS_VALUE
-        ? sortedRows
-        : sortedRows.filter((rule) => rule.chain === chainFilter),
-    [chainFilter, sortedRows]
+      [...ruleset.rawRules]
+        .filter((rule) => rule.table === "nat")
+        .sort((a, b) => a.order - b.order),
+    [ruleset.rawRules]
+  )
+  const chainSections = useMemo(
+    () =>
+      chains.map((chain) => {
+        const rows = sortedRows.filter((rule) => rule.chain === chain)
+        const readOnlyRows = rawRows.filter((rule) => rule.chain === chain)
+
+        return {
+          chain,
+          builtIn: isBuiltInChain("nat", chain),
+          count: rows.length,
+          rawCount: readOnlyRows.length,
+          policy: policyForChain(ruleset, "nat", chain),
+          rows,
+          rawRows: readOnlyRows,
+        }
+      }),
+    [chains, rawRows, ruleset, sortedRows]
+  )
+  const visibleSections = useMemo(
+    () => {
+      if (chainFilter !== ALL_CHAINS_VALUE) {
+        return chainSections.filter((section) => section.chain === chainFilter)
+      }
+
+      const populatedSections = chainSections.filter(
+        (section) => section.count + section.rawCount > 0
+      )
+      return populatedSections.length ? populatedSections : chainSections
+    },
+    [chainFilter, chainSections]
   )
 
   useEffect(() => {
@@ -1283,41 +1575,37 @@ function NatPanel({
   )
 
   const move = useCallback(
-    (rule: NatRule, direction: -1 | 1) => {
+    (rule: NatRule, direction: -1 | 1, visibleRows: NatRule[]) => {
       onChange({
         ...ruleset,
         natRules: moveRuleByVisibleOrder(
           ruleset.natRules,
-          rows,
+          visibleRows,
           rule,
           direction
         ),
       })
     },
-    [onChange, rows, ruleset]
+    [onChange, ruleset]
   )
 
   const reorder = useCallback(
-    (activeId: string, overId: string) => {
+    (activeId: string, overId: string, visibleRows: NatRule[]) => {
       onChange({
         ...ruleset,
         natRules: reorderRulesByVisibleDrop(
           ruleset.natRules,
-          rows,
+          visibleRows,
           activeId,
           overId
         ),
       })
     },
-    [onChange, rows, ruleset]
+    [onChange, ruleset]
   )
 
-  function addRule(rule: NatRule) {
-    onChange({ ...ruleset, natRules: [...ruleset.natRules, rule] })
-  }
-
-  const columns = useMemo<ColumnDef<NatRule>[]>(
-    () => [
+  const columnsForRows = useCallback(
+    (sectionRows: NatRule[]): ColumnDef<NatRule>[] => [
       {
         header: t("columnOrder"),
         cell: ({ row }) => (
@@ -1326,11 +1614,6 @@ function NatPanel({
           </span>
         ),
         size: 72,
-      },
-      {
-        header: t("columnChain"),
-        accessorKey: "chain",
-        size: 120,
       },
       {
         header: t("columnType"),
@@ -1383,22 +1666,30 @@ function NatPanel({
       {
         header: t("columnActions"),
         cell: ({ row }) => {
-          const index = rows.findIndex((item) => item.id === row.original.id)
+          const index = sectionRows.findIndex(
+            (item) => item.id === row.original.id
+          )
           return (
             <div className="flex items-center justify-end gap-1">
               <IconButton
                 label={t("moveNatRuleUp")}
-                onClick={() => move(row.original, -1)}
+                onClick={() => move(row.original, -1, sectionRows)}
                 disabled={index <= 0}
               >
                 <ChevronUp className="size-4" />
               </IconButton>
               <IconButton
                 label={t("moveNatRuleDown")}
-                onClick={() => move(row.original, 1)}
-                disabled={index >= rows.length - 1}
+                onClick={() => move(row.original, 1, sectionRows)}
+                disabled={index >= sectionRows.length - 1}
               >
                 <ChevronDown className="size-4" />
+              </IconButton>
+              <IconButton
+                label={t("editNatRule")}
+                onClick={() => onEdit(row.original)}
+              >
+                <Edit3 className="size-4" />
               </IconButton>
               <IconButton
                 label={t("deleteNatRule")}
@@ -1409,60 +1700,12 @@ function NatPanel({
             </div>
           )
         },
-        size: 146,
+        size: 180,
       },
     ],
-    [move, remove, rows, t]
+    [move, onEdit, remove, t]
   )
-
-  return (
-    <section className="space-y-4">
-      <PoliciesEditor ruleset={ruleset} onChange={onChange} table="nat" />
-      <ChainManager ruleset={ruleset} onChange={onChange} table="nat" />
-      <div className="grid gap-4 lg:grid-cols-2">
-        <PortForwardForm
-          chains={chains}
-          order={nextOrder(ruleset.natRules)}
-          onAdd={addRule}
-        />
-        <MasqueradeForm
-          chains={chains}
-          order={nextOrder(ruleset.natRules)}
-          onAdd={addRule}
-        />
-      </div>
-      <div className="grid gap-3">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <h2 className="text-base font-semibold tracking-normal">
-              {t("natRulesTitle")}
-            </h2>
-            <p className="text-sm text-muted-foreground">
-              {t("natRulesDescription")}
-            </p>
-          </div>
-          <ChainFilterSelect
-            value={chainFilter}
-            onValueChange={setChainFilter}
-            chains={chains}
-          />
-        </div>
-        <SortableDataTable
-          data={rows}
-          columns={columns}
-          empty={t("noNatRules")}
-          dragLabel={t("dragRuleToReorder")}
-          getRowId={(row) => row.id}
-          onReorder={reorder}
-        />
-      </div>
-    </section>
-  )
-}
-
-function RawPanel({ ruleset }: { ruleset: Ruleset }) {
-  const { t } = useI18n()
-  const columns = useMemo<ColumnDef<RawRule>[]>(
+  const rawColumns = useMemo<ColumnDef<RawRule>[]>(
     () => [
       {
         header: t("columnOrder"),
@@ -1473,8 +1716,6 @@ function RawPanel({ ruleset }: { ruleset: Ruleset }) {
         ),
         size: 72,
       },
-      { header: t("columnTable"), accessorKey: "table", size: 90 },
-      { header: t("columnChain"), accessorKey: "chain", size: 120 },
       {
         header: t("columnLine"),
         cell: ({ row }) => (
@@ -1495,8 +1736,185 @@ function RawPanel({ ruleset }: { ruleset: Ruleset }) {
     [t]
   )
 
-  const rawRows = [...ruleset.rawRules].sort(
-    (a, b) => a.table.localeCompare(b.table) || a.order - b.order
+  return (
+    <section className="grid items-start gap-4 xl:grid-cols-[15rem_minmax(0,1fr)_20rem]">
+      <ChainNavigation
+        title={t("chainDirectory")}
+        description={t("chainDirectoryDescription")}
+        items={chainSections}
+        activeValue={chainFilter}
+        allCount={sortedRows.length + rawRows.length}
+        onValueChange={setChainFilter}
+      />
+
+      <div className="grid min-w-0 content-start gap-4 self-start">
+        <div className="rounded-lg border bg-card p-3 xl:hidden">
+          <ChainFilterSelect
+            value={chainFilter}
+            onValueChange={setChainFilter}
+            chains={chains}
+          />
+        </div>
+
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h2 className="text-base font-semibold tracking-normal">
+              {t("natRulesTitle")}
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              {t("natRulesDescription")}
+            </p>
+          </div>
+          <Button
+            onClick={() =>
+              onCreate(
+                chainFilter === ALL_CHAINS_VALUE ? undefined : chainFilter
+              )
+            }
+          >
+            <Plus className="size-4" />
+            {t("addRule")}
+          </Button>
+        </div>
+
+        <div className="grid gap-4">
+          {visibleSections.map((section) => (
+            <section
+              key={section.chain}
+              className="overflow-hidden rounded-lg border bg-card"
+            >
+              <div className="flex flex-col gap-3 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="font-mono text-base font-semibold tracking-normal">
+                      {section.chain}
+                    </h3>
+                    <Badge variant="secondary">
+                      {section.builtIn
+                        ? t("builtInChain")
+                        : t("customChainBadge")}
+                    </Badge>
+                    <StatusBadge tone="muted">
+                      {t("policyLabel")}: {section.policy}
+                    </StatusBadge>
+                  </div>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {t("chainRuleCount", { count: section.count })}
+                    {section.rawCount
+                      ? ` / ${t("readOnlyCount", {
+                          count: section.rawCount,
+                        })}`
+                      : ""}
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onCreate(section.chain)}
+                >
+                  <Plus className="size-4" />
+                  {t("addRule")}
+                </Button>
+              </div>
+              <div className="grid gap-3 p-3">
+                {section.rows.length ? (
+                  <SortableDataTable
+                    data={section.rows}
+                    columns={columnsForRows(section.rows)}
+                    empty={t("noRulesInChain")}
+                    dragLabel={t("dragRuleToReorder")}
+                    getRowId={(row) => row.id}
+                    onReorder={(activeId, overId) =>
+                      reorder(activeId, overId, section.rows)
+                    }
+                    ariaLabel={`${section.chain} ${t("natRulesTitle")}`}
+                    density="compact"
+                  />
+                ) : null}
+                {section.rawRows.length ? (
+                  <div className="grid gap-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <h4 className="text-sm font-medium tracking-normal">
+                        {t("readOnlyRules")}
+                      </h4>
+                      <Badge variant="secondary">
+                        {t("readOnlyCount", { count: section.rawRows.length })}
+                      </Badge>
+                    </div>
+                    <DataTable
+                      data={section.rawRows}
+                      columns={rawColumns}
+                      empty={t("noUnsupportedRules")}
+                      ariaLabel={`${section.chain} ${t("natRawTitle")}`}
+                      density="compact"
+                    />
+                  </div>
+                ) : null}
+                {!section.rows.length && !section.rawRows.length ? (
+                  <ChainEmptyState
+                    message={t("noRulesInChain")}
+                    actionLabel={t("addRule")}
+                    onAction={() => onCreate(section.chain)}
+                  />
+                ) : null}
+              </div>
+            </section>
+          ))}
+        </div>
+      </div>
+
+      <aside className="order-first grid gap-4 self-start xl:order-none xl:sticky xl:top-28">
+        <div className="rounded-lg border bg-card p-4">
+          <h2 className="text-base font-semibold tracking-normal">
+            {t("tableToolsTitle")}
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            {t("tableToolsDescription")}
+          </p>
+        </div>
+        <PoliciesEditor ruleset={ruleset} onChange={onChange} table="nat" />
+        <ChainManager ruleset={ruleset} onChange={onChange} table="nat" />
+      </aside>
+    </section>
+  )
+}
+
+function RawPanel({ ruleset }: { ruleset: Ruleset }) {
+  const { t } = useI18n()
+  const columns = useMemo<ColumnDef<RawRule>[]>(
+    () => [
+      {
+        header: t("columnOrder"),
+        cell: ({ row }) => (
+          <span className="font-mono text-xs text-muted-foreground">
+            {row.original.order}
+          </span>
+        ),
+        size: 72,
+      },
+      {
+        header: t("columnLine"),
+        cell: ({ row }) => (
+          <code className="block min-w-80 font-mono text-xs whitespace-nowrap">
+            {row.original.line}
+          </code>
+        ),
+      },
+      {
+        header: t("columnReason"),
+        cell: ({ row }) => (
+          <span className="text-sm text-muted-foreground">
+            {row.original.reason}
+          </span>
+        ),
+      },
+    ],
+    [t]
+  )
+
+  const rawGroups = useMemo(
+    () => groupRawRules(ruleset.rawRules),
+    [ruleset.rawRules]
   )
 
   return (
@@ -1512,22 +1930,60 @@ function RawPanel({ ruleset }: { ruleset: Ruleset }) {
           {t("readOnlyCount", { count: ruleset.rawRules.length })}
         </StatusBadge>
       </div>
-      <DataTable
-        data={rawRows}
-        columns={columns}
-        empty={t("noUnsupportedRules")}
-      />
-      <div className="grid gap-2">
-        <div className="flex items-center gap-2 text-sm font-medium">
-          <Terminal className="size-4" />
-          {t("rawSnapshotTitle")}
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_26rem]">
+        <div className="grid min-w-0 gap-3">
+          {rawGroups.length ? (
+            rawGroups.map((group) => (
+              <section
+                key={`${group.table}-${group.chain}`}
+                className="overflow-hidden rounded-lg border bg-card"
+              >
+                <div className="flex flex-col gap-2 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="secondary">{group.table}</Badge>
+                    <h3 className="font-mono text-base font-semibold tracking-normal">
+                      {group.chain || t("raw")}
+                    </h3>
+                  </div>
+                  <StatusBadge tone="muted">
+                    {t("readOnlyCount", { count: group.rows.length })}
+                  </StatusBadge>
+                </div>
+                <div className="p-3">
+                  <DataTable
+                    data={group.rows}
+                    columns={columns}
+                    empty={t("noUnsupportedRules")}
+                    ariaLabel={`${group.table} ${group.chain} ${t("rawTitle")}`}
+                    density="compact"
+                  />
+                </div>
+              </section>
+            ))
+          ) : (
+            <DataTable
+              data={[]}
+              columns={columns}
+              empty={t("noUnsupportedRules")}
+              ariaLabel={t("rawTitle")}
+              density="compact"
+            />
+          )}
         </div>
-        <ScrollArea className="h-[420px] rounded-lg border bg-zinc-950 p-3 text-zinc-50">
-          <pre className="min-w-max font-mono text-xs leading-relaxed">
-            {ruleset.raw || t("noRawSnapshot")}
-          </pre>
-          <ScrollBar orientation="horizontal" />
-        </ScrollArea>
+
+        <div className="grid gap-2 self-start xl:sticky xl:top-28">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <Terminal className="size-4" />
+            {t("rawSnapshotTitle")}
+          </div>
+          <ScrollArea className="h-[420px] rounded-lg border bg-zinc-950 p-3 text-zinc-50">
+            <pre className="min-w-max font-mono text-xs leading-relaxed">
+              {ruleset.raw || t("noRawSnapshot")}
+            </pre>
+            <ScrollBar orientation="horizontal" />
+          </ScrollArea>
+        </div>
       </div>
     </section>
   )
@@ -1547,7 +2003,7 @@ function FilterRuleDialog({
   onSave: (rule: FilterRule) => void
 }) {
   const { t, translateValidationMessage } = useI18n()
-  const existing = editor?.rule
+  const existing = editor?.mode === "edit" ? editor.rule : undefined
   const chainOptions = useMemo(
     () => tableChainNames(ruleset, "filter"),
     [ruleset]
@@ -1556,8 +2012,12 @@ function FilterRuleDialog({
     () => uniqueStrings([...FILTER_TARGETS, ...chainOptions]),
     [chainOptions]
   )
+  const initialChain =
+    existing?.chain ??
+    (editor?.mode === "create" ? editor.initialChain : undefined) ??
+    "INPUT"
   const [form, setForm] = useState<FilterRuleFormState>({
-    chain: existing?.chain ?? "INPUT",
+    chain: preferredChain(chainOptions, initialChain),
     target: existing?.target ?? "ACCEPT",
     protocol: existing?.protocol ? existing.protocol : "any",
     source: existing?.source ?? "",
@@ -1694,244 +2154,6 @@ function FilterRuleDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  )
-}
-
-function PortForwardForm({
-  chains,
-  order,
-  onAdd,
-}: {
-  chains: string[]
-  order: number
-  onAdd: (rule: NatRule) => void
-}) {
-  const { t, translateValidationMessage } = useI18n()
-  const defaultChain = preferredChain(chains, "PREROUTING")
-  const [form, setForm] = useState({
-    chain: defaultChain,
-    protocol: "tcp",
-    listenPort: "",
-    destinationIp: "",
-    destinationPort: "",
-    sourceCidr: "",
-    inInterface: "",
-    comment: "",
-  })
-  const [errors, setErrors] = useState<string[]>([])
-
-  useEffect(() => {
-    if (!chains.includes(form.chain)) {
-      setForm((current) => ({ ...current, chain: defaultChain }))
-    }
-  }, [chains, defaultChain, form.chain])
-
-  function add() {
-    const parsed = portForwardSchema(chains).safeParse(form)
-    if (!parsed.success) {
-      setErrors(zodMessages(parsed.error, translateValidationMessage))
-      return
-    }
-
-    const value = parsed.data
-    onAdd({
-      id: newId("nat"),
-      type: "port-forward",
-      table: "nat",
-      chain: value.chain,
-      protocol: value.protocol,
-      listenPort: value.listenPort,
-      destinationIp: value.destinationIp,
-      destinationPort: value.destinationPort,
-      sourceCidr: compact(value.sourceCidr),
-      inInterface: compact(value.inInterface),
-      comment: compact(value.comment),
-      target: "DNAT",
-      order,
-      readOnly: false,
-    })
-    setForm({
-      chain: defaultChain,
-      protocol: "tcp",
-      listenPort: "",
-      destinationIp: "",
-      destinationPort: "",
-      sourceCidr: "",
-      inInterface: "",
-      comment: "",
-    })
-    setErrors([])
-    toast.success(t("toastPortForwardAdded"))
-  }
-
-  return (
-    <div className="grid gap-4 rounded-lg border bg-card p-4">
-      <div>
-        <h2 className="text-base font-semibold tracking-normal">
-          {t("portForwardTitle")}
-        </h2>
-        <p className="text-sm text-muted-foreground">
-          {t("portForwardDescription")}
-        </p>
-      </div>
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        <SelectField
-          label={t("fieldChain")}
-          value={form.chain}
-          onValueChange={(value) => setForm({ ...form, chain: value })}
-          options={chains}
-        />
-        <SelectField
-          label={t("fieldProtocol")}
-          value={form.protocol}
-          onValueChange={(value) =>
-            setForm({ ...form, protocol: value as "tcp" | "udp" })
-          }
-          options={["tcp", "udp"]}
-        />
-        <TextField
-          label={t("fieldListenPort")}
-          value={form.listenPort}
-          onChange={(value) => setForm({ ...form, listenPort: value })}
-          inputMode="numeric"
-        />
-        <TextField
-          label={t("fieldDestinationIp")}
-          value={form.destinationIp}
-          onChange={(value) => setForm({ ...form, destinationIp: value })}
-          placeholder="10.0.0.20"
-        />
-        <TextField
-          label={t("fieldDestinationPort")}
-          value={form.destinationPort}
-          onChange={(value) => setForm({ ...form, destinationPort: value })}
-          inputMode="numeric"
-        />
-        <TextField
-          label={t("fieldSourceCidr")}
-          value={form.sourceCidr}
-          onChange={(value) => setForm({ ...form, sourceCidr: value })}
-          placeholder={t("optionalPlaceholder")}
-        />
-        <TextField
-          label={t("fieldInputInterface")}
-          value={form.inInterface}
-          onChange={(value) => setForm({ ...form, inInterface: value })}
-          placeholder={t("optionalPlaceholder")}
-        />
-      </div>
-      <TextField
-        label={t("fieldComment")}
-        value={form.comment}
-        onChange={(value) => setForm({ ...form, comment: value })}
-      />
-      <ErrorList errors={errors} />
-      <div>
-        <Button onClick={add}>
-          <Plus className="size-4" />
-          {t("addForward")}
-        </Button>
-      </div>
-    </div>
-  )
-}
-
-function MasqueradeForm({
-  chains,
-  order,
-  onAdd,
-}: {
-  chains: string[]
-  order: number
-  onAdd: (rule: NatRule) => void
-}) {
-  const { t, translateValidationMessage } = useI18n()
-  const defaultChain = preferredChain(chains, "POSTROUTING")
-  const [form, setForm] = useState({
-    chain: defaultChain,
-    sourceCidr: "",
-    outInterface: "",
-    comment: "",
-  })
-  const [errors, setErrors] = useState<string[]>([])
-
-  useEffect(() => {
-    if (!chains.includes(form.chain)) {
-      setForm((current) => ({ ...current, chain: defaultChain }))
-    }
-  }, [chains, defaultChain, form.chain])
-
-  function add() {
-    const parsed = masqueradeSchema(chains).safeParse(form)
-    if (!parsed.success) {
-      setErrors(zodMessages(parsed.error, translateValidationMessage))
-      return
-    }
-
-    const value = parsed.data
-    onAdd({
-      id: newId("nat"),
-      type: "masquerade",
-      table: "nat",
-      chain: value.chain,
-      sourceCidr: compact(value.sourceCidr),
-      outInterface: compact(value.outInterface),
-      comment: compact(value.comment),
-      target: "MASQUERADE",
-      order,
-      readOnly: false,
-    })
-    setForm({
-      chain: defaultChain,
-      sourceCidr: "",
-      outInterface: "",
-      comment: "",
-    })
-    setErrors([])
-    toast.success(t("toastMasqueradeAdded"))
-  }
-
-  return (
-    <div className="grid gap-4 rounded-lg border bg-card p-4">
-      <div>
-        <h2 className="text-base font-semibold tracking-normal">MASQUERADE</h2>
-        <p className="text-sm text-muted-foreground">
-          {t("masqueradeDescription")}
-        </p>
-      </div>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <SelectField
-          label={t("fieldChain")}
-          value={form.chain}
-          onValueChange={(value) => setForm({ ...form, chain: value })}
-          options={chains}
-        />
-        <TextField
-          label={t("fieldSourceCidr")}
-          value={form.sourceCidr}
-          onChange={(value) => setForm({ ...form, sourceCidr: value })}
-          placeholder="10.0.0.0/24"
-        />
-        <TextField
-          label={t("fieldOutputInterface")}
-          value={form.outInterface}
-          onChange={(value) => setForm({ ...form, outInterface: value })}
-          placeholder="eth0"
-        />
-      </div>
-      <TextField
-        label={t("fieldComment")}
-        value={form.comment}
-        onChange={(value) => setForm({ ...form, comment: value })}
-      />
-      <ErrorList errors={errors} />
-      <div>
-        <Button variant="secondary" onClick={add}>
-          <Plus className="size-4" />
-          {t("addMasquerade")}
-        </Button>
-      </div>
-    </div>
   )
 }
 
@@ -2107,16 +2329,28 @@ function ErrorList({ errors }: { errors: string[] }) {
 function RuleMatch({ rule }: { rule: FilterRule }) {
   const { t } = useI18n()
   const parts = [
-    rule.protocol ? `proto:${rule.protocol}` : `proto:${t("any")}`,
-    rule.source ? `src:${rule.source}` : "",
-    rule.destination ? `dst:${rule.destination}` : "",
-    rule.inInterface ? `in:${rule.inInterface}` : "",
-    rule.outInterface ? `out:${rule.outInterface}` : "",
-    rule.sourcePort ? `sport:${rule.sourcePort}` : "",
-    rule.destinationPort ? `dport:${rule.destinationPort}` : "",
-  ].filter(Boolean)
+    ["proto", rule.protocol || t("any")],
+    ["src", rule.source],
+    ["dst", rule.destination],
+    ["in", rule.inInterface],
+    ["out", rule.outInterface],
+    ["sport", rule.sourcePort],
+    ["dport", rule.destinationPort],
+  ].filter(([, value]) => value)
 
-  return <span className="font-mono text-xs">{parts.join(" ")}</span>
+  return (
+    <span className="flex min-w-80 flex-wrap gap-1 font-mono text-xs">
+      {parts.map(([label, value]) => (
+        <span
+          key={`${label}-${value}`}
+          className="rounded-md border bg-muted/40 px-1.5 py-0.5"
+        >
+          <span className="text-muted-foreground">{label}:</span>
+          {value}
+        </span>
+      ))}
+    </span>
+  )
 }
 
 function LoadingPanel() {
@@ -2227,11 +2461,58 @@ function tableChainNames(ruleset: Ruleset, table: TableName) {
     .filter((policy) => policy.table === table)
     .sort((a, b) => a.order - b.order)
   policies.forEach((policy) => chains.add(policy.chain))
+  if (table === "filter") {
+    ruleset.filterRules.forEach((rule) => chains.add(rule.chain))
+  } else {
+    ruleset.natRules.forEach((rule) => chains.add(rule.chain))
+  }
+  ruleset.rawRules.forEach((rule) => {
+    if (rule.table === table && rule.chain) {
+      chains.add(rule.chain)
+    }
+  })
   return [...chains]
+}
+
+function policyForChain(ruleset: Ruleset, table: TableName, chain: string) {
+  return (
+    ruleset.policies.find(
+      (policy) => policy.table === table && policy.chain === chain
+    )?.policy ?? "-"
+  )
 }
 
 function preferredChain(chains: string[], preferred: string) {
   return chains.includes(preferred) ? preferred : (chains[0] ?? preferred)
+}
+
+function groupRawRules(rawRules: RawRule[]) {
+  const groups = new Map<
+    string,
+    { table: string; chain: string; rows: RawRule[] }
+  >()
+
+  ;[...rawRules]
+    .sort(
+      (a, b) =>
+        a.table.localeCompare(b.table) ||
+        (a.chain || "").localeCompare(b.chain || "") ||
+        a.order - b.order
+    )
+    .forEach((rule) => {
+      const key = `${rule.table}:${rule.chain || ""}`
+      const group =
+        groups.get(key) ??
+        {
+          table: rule.table,
+          chain: rule.chain || "",
+          rows: [],
+        }
+      group.rows.push(rule)
+      groups.set(key, group)
+    })
+
+  return [...groups.values()]
 }
 
 function isBuiltInChain(table: TableName, chain: string) {
@@ -2459,6 +2740,269 @@ function actionTitle(action: ConfirmAction, t: TFunction) {
   if (action === "shutdown") return t("shutdownFailed")
   if (action === "refresh") return t("toastRefreshFailedTitle")
   return t("actionFailed")
+}
+
+function NatRuleDialog({
+  editor,
+  ruleset,
+  nextOrderValue,
+  onClose,
+  onSave,
+}: {
+  editor: NatEditor
+  ruleset: Ruleset
+  nextOrderValue: number
+  onClose: () => void
+  onSave: (rule: NatRule) => void
+}) {
+  const { t, translateValidationMessage } = useI18n()
+  const existing = editor?.mode === "edit" ? editor.rule : undefined
+  const chainOptions = useMemo(() => tableChainNames(ruleset, "nat"), [ruleset])
+  const initialCreateType =
+    editor?.mode === "create" && editor.initialChain === "POSTROUTING"
+      ? "masquerade"
+      : "port-forward"
+  const [createType, setCreateType] =
+    useState<NatRule["type"]>(initialCreateType)
+  const ruleType = existing?.type ?? createType
+  const defaultChain = preferredChain(
+    chainOptions,
+    ruleType === "masquerade" ? "POSTROUTING" : "PREROUTING"
+  )
+  const initialChain =
+    editor?.mode === "create" &&
+    editor.initialChain &&
+    chainOptions.includes(editor.initialChain)
+      ? editor.initialChain
+      : undefined
+  const [form, setForm] = useState<NatRuleFormState>({
+    chain: existing?.chain ?? initialChain ?? defaultChain,
+    protocol: existing?.protocol === "udp" ? "udp" : "tcp",
+    listenPort: existing?.listenPort ?? "",
+    destinationIp: existing?.destinationIp ?? "",
+    destinationPort: existing?.destinationPort ?? "",
+    sourceCidr: existing?.sourceCidr ?? "",
+    inInterface: existing?.inInterface ?? "",
+    outInterface: existing?.outInterface ?? "",
+    comment: existing?.comment ?? "",
+  })
+  const [errors, setErrors] = useState<string[]>([])
+
+  useEffect(() => {
+    if (!chainOptions.includes(form.chain)) {
+      setForm((current) => ({ ...current, chain: defaultChain }))
+    }
+  }, [chainOptions, defaultChain, form.chain])
+
+  function updateCreateType(value: NatRule["type"]) {
+    const previousDefaultChain = preferredChain(
+      chainOptions,
+      createType === "masquerade" ? "POSTROUTING" : "PREROUTING"
+    )
+    const nextDefaultChain = preferredChain(
+      chainOptions,
+      value === "masquerade" ? "POSTROUTING" : "PREROUTING"
+    )
+
+    setCreateType(value)
+    setErrors([])
+    setForm((current) => ({
+      ...current,
+      chain:
+        current.chain === previousDefaultChain
+          ? nextDefaultChain
+          : current.chain,
+    }))
+  }
+
+  function save() {
+    if (!editor) return
+
+    if (ruleType === "port-forward") {
+      const parsed = portForwardSchema(chainOptions).safeParse({
+        chain: form.chain,
+        protocol: form.protocol,
+        listenPort: form.listenPort,
+        destinationIp: form.destinationIp,
+        destinationPort: form.destinationPort,
+        sourceCidr: form.sourceCidr,
+        inInterface: form.inInterface,
+        comment: form.comment,
+      })
+      if (!parsed.success) {
+        setErrors(zodMessages(parsed.error, translateValidationMessage))
+        return
+      }
+
+      const value = parsed.data
+      onSave({
+        id: existing?.id ?? newId("nat"),
+        type: "port-forward",
+        table: "nat",
+        chain: value.chain,
+        protocol: value.protocol,
+        listenPort: value.listenPort,
+        destinationIp: value.destinationIp,
+        destinationPort: value.destinationPort,
+        sourceCidr: compact(value.sourceCidr),
+        inInterface: compact(value.inInterface),
+        comment: compact(value.comment),
+        target: "DNAT",
+        toDestination: `${value.destinationIp}:${value.destinationPort}`,
+        order: existing?.order ?? nextOrderValue,
+        readOnly: existing?.readOnly ?? false,
+        extra: existing?.extra,
+      })
+      return
+    }
+
+    const parsed = masqueradeSchema(chainOptions).safeParse({
+      chain: form.chain,
+      sourceCidr: form.sourceCidr,
+      outInterface: form.outInterface,
+      comment: form.comment,
+    })
+    if (!parsed.success) {
+      setErrors(zodMessages(parsed.error, translateValidationMessage))
+      return
+    }
+
+    const value = parsed.data
+    onSave({
+      id: existing?.id ?? newId("nat"),
+      type: "masquerade",
+      table: "nat",
+      chain: value.chain,
+      sourceCidr: compact(value.sourceCidr),
+      outInterface: compact(value.outInterface),
+      comment: compact(value.comment),
+      target: "MASQUERADE",
+      order: existing?.order ?? nextOrderValue,
+      readOnly: existing?.readOnly ?? false,
+      extra: existing?.extra,
+    })
+  }
+
+  return (
+    <Dialog open={editor !== null} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>
+            {existing ? t("editNatRule") : t("addNatRule")}
+          </DialogTitle>
+          <DialogDescription>
+            {existing
+              ? t("natRuleDialogDescription")
+              : t("createNatRuleDialogDescription")}
+          </DialogDescription>
+        </DialogHeader>
+        {existing ? null : (
+          <SelectField
+            label={t("fieldNatRuleType")}
+            value={createType}
+            onValueChange={(value) => updateCreateType(value as NatRule["type"])}
+            options={["port-forward", "masquerade"]}
+            formatOption={(option) =>
+              option === "port-forward" ? t("portForwardTitle") : "MASQUERADE"
+            }
+          />
+        )}
+        {ruleType === "port-forward" ? (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <SelectField
+              label={t("fieldChain")}
+              value={form.chain}
+              onValueChange={(value) => setForm({ ...form, chain: value })}
+              options={chainOptions}
+            />
+            <SelectField
+              label={t("fieldProtocol")}
+              value={form.protocol}
+              onValueChange={(value) =>
+                setForm({ ...form, protocol: value as "tcp" | "udp" })
+              }
+              options={["tcp", "udp"]}
+            />
+            <TextField
+              label={t("fieldListenPort")}
+              value={form.listenPort}
+              onChange={(value) => setForm({ ...form, listenPort: value })}
+              inputMode="numeric"
+            />
+            <TextField
+              label={t("fieldDestinationIp")}
+              value={form.destinationIp}
+              onChange={(value) => setForm({ ...form, destinationIp: value })}
+              placeholder="10.0.0.20"
+            />
+            <TextField
+              label={t("fieldDestinationPort")}
+              value={form.destinationPort}
+              onChange={(value) =>
+                setForm({ ...form, destinationPort: value })
+              }
+              inputMode="numeric"
+            />
+            <TextField
+              label={t("fieldSourceCidr")}
+              value={form.sourceCidr}
+              onChange={(value) => setForm({ ...form, sourceCidr: value })}
+              placeholder={t("optionalPlaceholder")}
+            />
+            <TextField
+              label={t("fieldInputInterface")}
+              value={form.inInterface}
+              onChange={(value) => setForm({ ...form, inInterface: value })}
+              placeholder={t("optionalPlaceholder")}
+            />
+            <div className="sm:col-span-2 lg:col-span-3">
+              <TextField
+                label={t("fieldComment")}
+                value={form.comment}
+                onChange={(value) => setForm({ ...form, comment: value })}
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2">
+            <SelectField
+              label={t("fieldChain")}
+              value={form.chain}
+              onValueChange={(value) => setForm({ ...form, chain: value })}
+              options={chainOptions}
+            />
+            <TextField
+              label={t("fieldSourceCidr")}
+              value={form.sourceCidr}
+              onChange={(value) => setForm({ ...form, sourceCidr: value })}
+              placeholder="10.0.0.0/24"
+            />
+            <TextField
+              label={t("fieldOutputInterface")}
+              value={form.outInterface}
+              onChange={(value) => setForm({ ...form, outInterface: value })}
+              placeholder="eth0"
+            />
+            <TextField
+              label={t("fieldComment")}
+              value={form.comment}
+              onChange={(value) => setForm({ ...form, comment: value })}
+            />
+          </div>
+        )}
+        <ErrorList errors={errors} />
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            {t("cancel")}
+          </Button>
+          <Button onClick={save}>
+            <Save className="size-4" />
+            {t("saveRule")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
 }
 
 export default App

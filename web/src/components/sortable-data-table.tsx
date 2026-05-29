@@ -49,6 +49,9 @@ type SortableDataTableProps<TData, TValue> = {
   getRowId: (row: TData) => string
   onReorder: (activeId: string, overId: string) => void
   className?: string
+  ariaLabel?: string
+  density?: "default" | "compact"
+  stickyHeader?: boolean
 }
 
 export function SortableDataTable<TData, TValue>({
@@ -59,6 +62,9 @@ export function SortableDataTable<TData, TValue>({
   getRowId,
   onReorder,
   className,
+  ariaLabel,
+  density = "default",
+  stickyHeader = true,
 }: SortableDataTableProps<TData, TValue>) {
   const table = useReactTable({
     data,
@@ -88,22 +94,33 @@ export function SortableDataTable<TData, TValue>({
       onDragEnd={handleDragEnd}
     >
       <div
-        className={cn("overflow-hidden rounded-lg border bg-card", className)}
+        className={cn(
+          "overflow-hidden rounded-lg border bg-card shadow-sm",
+          className
+        )}
       >
         <div className="overflow-x-auto">
-          <Table>
-            <TableHeader>
+          <Table aria-label={ariaLabel}>
+            <TableHeader className={cn(stickyHeader && "sticky top-0 z-10")}>
               {table.getHeaderGroups().map((group) => (
                 <TableRow
                   key={group.id}
-                  className="bg-muted/60 hover:bg-muted/60"
+                  className="bg-muted/80 hover:bg-muted/80"
                 >
-                  <TableHead className="h-9 w-10" />
+                  <TableHead
+                    className={cn(
+                      "w-10",
+                      density === "compact" ? "h-8" : "h-9"
+                    )}
+                  />
                   {group.headers.map((header) => (
                     <TableHead
                       key={header.id}
                       style={{ width: header.getSize() }}
-                      className="h-9 text-xs font-semibold tracking-normal whitespace-nowrap uppercase"
+                      className={cn(
+                        "text-xs font-semibold tracking-normal whitespace-nowrap uppercase",
+                        density === "compact" ? "h-8 px-2" : "h-9"
+                      )}
                     >
                       {header.isPlaceholder
                         ? null
@@ -128,6 +145,7 @@ export function SortableDataTable<TData, TValue>({
                       row={row}
                       dragLabel={dragLabel}
                       disabled={itemIds.length < 2}
+                      density={density}
                     />
                   ))}
                 </SortableContext>
@@ -153,10 +171,12 @@ function SortableTableRow<TData>({
   row,
   dragLabel,
   disabled,
+  density,
 }: {
   row: Row<TData>
   dragLabel: string
   disabled: boolean
+  density: "default" | "compact"
 }) {
   const {
     attributes,
@@ -182,7 +202,12 @@ function SortableTableRow<TData>({
       data-state={isDragging ? "selected" : undefined}
       className={cn(isDragging && "relative bg-muted/80 shadow-sm")}
     >
-      <TableCell className="w-10 px-2 align-middle">
+      <TableCell
+        className={cn(
+          "w-10 px-2 align-middle",
+          density === "compact" && "py-1.5"
+        )}
+      >
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
@@ -203,7 +228,13 @@ function SortableTableRow<TData>({
         </Tooltip>
       </TableCell>
       {row.getVisibleCells().map((cell) => (
-        <TableCell key={cell.id} className="align-middle">
+        <TableCell
+          key={cell.id}
+          className={cn(
+            "align-middle",
+            density === "compact" && "px-2 py-1.5"
+          )}
+        >
           {flexRender(cell.column.columnDef.cell, cell.getContext())}
         </TableCell>
       ))}
