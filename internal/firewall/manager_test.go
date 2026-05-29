@@ -115,6 +115,40 @@ func TestRollbackRestoresLastSnapshotOnce(t *testing.T) {
 	}
 }
 
+func TestRulesKeepsDiagnosticsFailures(t *testing.T) {
+	runner := &diagnosticFakeRunner{
+		fakeRunner: fakeRunner{raw: MockRules()},
+		diagnostics: Diagnostics{Commands: []CommandDiagnostic{
+			{
+				Name:     "iptables",
+				Args:     []string{"-t", "nat", "-L", "-v", "-n", "-x", "--line-numbers"},
+				ExitCode: 1,
+				Error:    "permission denied",
+			},
+		}},
+	}
+	manager := NewManager(runner)
+	rs, err := manager.Rules(context.Background())
+	if err != nil {
+		t.Fatalf("Rules: %v", err)
+	}
+	if len(rs.FilterRules) == 0 {
+		t.Fatal("expected rules to load despite diagnostics failure")
+	}
+	if len(rs.Diagnostics.Commands) != 1 || rs.Diagnostics.Commands[0].ExitCode != 1 {
+		t.Fatalf("expected diagnostics failure to be retained, got %#v", rs.Diagnostics)
+	}
+}
+
+type diagnosticFakeRunner struct {
+	fakeRunner
+	diagnostics Diagnostics
+}
+
+func (r *diagnosticFakeRunner) Diagnostics(context.Context, string) Diagnostics {
+	return r.diagnostics
+}
+
 func stringsReplaceFirst(s, old, new string) string {
 	idx := -1
 	for i := 0; i+len(old) <= len(s); i++ {

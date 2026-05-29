@@ -19,6 +19,7 @@ import { clone, cn, isEqualJSON, nextOrder } from "@/lib/utils"
 import type { Ruleset, SystemStatus } from "@/types/firewall"
 
 import { ConfirmActionDialog } from "./components/confirm-action-dialog"
+import { DiagnosticsPanel } from "./pages/diagnostics-page"
 import { FilterRuleDialog } from "./components/filter-rule-dialog"
 import { LanguageSelect } from "./components/language-select"
 import { LoadingPanel } from "./components/loading-panel"
@@ -388,6 +389,7 @@ export function FirewallApp() {
             <TabsTrigger value="filter">{t("tabFilter")}</TabsTrigger>
             <TabsTrigger value="nat">{t("tabNat")}</TabsTrigger>
             <TabsTrigger value="raw">{t("tabRaw")}</TabsTrigger>
+            <TabsTrigger value="diagnostics">{t("tabDiagnostics")}</TabsTrigger>
           </TabsList>
 
           <TabsContent value="overview" className="mt-4">
@@ -438,6 +440,14 @@ export function FirewallApp() {
               <LoadingPanel />
             ) : draft ? (
               <RawPanel ruleset={draft} />
+            ) : null}
+          </TabsContent>
+
+          <TabsContent value="diagnostics" className="mt-4">
+            {loading ? (
+              <LoadingPanel />
+            ) : draft ? (
+              <DiagnosticsPanel ruleset={draft} />
             ) : null}
           </TabsContent>
         </Tabs>

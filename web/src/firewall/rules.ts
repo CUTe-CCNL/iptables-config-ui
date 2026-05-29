@@ -1,14 +1,31 @@
 import { clone } from "@/lib/utils"
-import type { RawRule, Ruleset } from "@/types/firewall"
+import type {
+  FilterRule,
+  NatRule,
+  RawRule,
+  RulePosition,
+  Ruleset,
+} from "@/types/firewall"
 
 import { BUILT_IN_CHAINS } from "./constants"
 import type { TableName } from "./types"
 
-export function tableChainNames(ruleset: Ruleset, table: TableName) {
-  const chains = new Set(BUILT_IN_CHAINS[table])
+export function tableChainNames(
+  ruleset: Ruleset,
+  table: TableName,
+  options: { includeDefaults?: boolean } = {}
+) {
+  const chains = new Set<string>()
+  if (options.includeDefaults) {
+    BUILT_IN_CHAINS[table].forEach((chain) => chains.add(chain))
+  }
+  const tableInfo = ruleset.tables?.find((item) => item.name === table)
+  ;[...(tableInfo?.chains ?? [])]
+    .sort((a, b) => a.order - b.order)
+    .forEach((chain) => chains.add(chain.name))
   const policies = [...ruleset.policies]
     .filter((policy) => policy.table === table)
-    .sort((a, b) => a.order - b.order)
+    .sort((a, b) => ruleSortValue(a) - ruleSortValue(b))
   policies.forEach((policy) => chains.add(policy.chain))
   if (table === "filter") {
     ruleset.filterRules.forEach((rule) => chains.add(rule.chain))
@@ -48,9 +65,11 @@ export function groupRawRules(rawRules: RawRule[]) {
   ;[...rawRules]
     .sort(
       (a, b) =>
+        (a.position?.tableOrder ?? 999) - (b.position?.tableOrder ?? 999) ||
         a.table.localeCompare(b.table) ||
+        (a.position?.chainOrder ?? 999) - (b.position?.chainOrder ?? 999) ||
         (a.chain || "").localeCompare(b.chain || "") ||
-        a.order - b.order
+        ruleSortValue(a) - ruleSortValue(b)
     )
     .forEach((rule) => {
       const key = `${rule.table}:${rule.chain || ""}`
@@ -74,7 +93,9 @@ export function uniqueStrings(values: string[]) {
   return [...new Set(values)]
 }
 
-export function moveRuleByVisibleOrder<T extends { id: string; order: number }>(
+type OrderedRule = { id: string; order: number; position?: RulePosition }
+
+export function moveRuleByVisibleOrder<T extends OrderedRule>(
   allRules: T[],
   visibleRows: T[],
   rule: T,
@@ -88,20 +109,23 @@ export function moveRuleByVisibleOrder<T extends { id: string; order: number }>(
 
   return allRules.map((item) => {
     if (item.id === rule.id) {
-      return { ...item, order: next.order }
+      return withDraftOrder(item, next.order, next.position?.lineNumber)
     }
 
     if (item.id === next.id) {
-      return { ...item, order: rule.order }
+      return withDraftOrder(item, rule.order, rule.position?.lineNumber)
     }
 
     return item
   })
 }
 
-export function reorderRulesByVisibleDrop<
-  T extends { id: string; order: number },
->(allRules: T[], visibleRows: T[], activeId: string, overId: string) {
+export function reorderRulesByVisibleDrop<T extends OrderedRule>(
+  allRules: T[],
+  visibleRows: T[],
+  activeId: string,
+  overId: string
+) {
   const activeIndex = visibleRows.findIndex((item) => item.id === activeId)
   const overIndex = visibleRows.findIndex((item) => item.id === overId)
   if (activeIndex < 0 || overIndex < 0 || activeIndex === overIndex) {
@@ -113,13 +137,41 @@ export function reorderRulesByVisibleDrop<
   reordered.splice(overIndex, 0, active)
 
   const orderById = new Map(
-    reordered.map((item, index) => [item.id, visibleRows[index].order])
+    reordered.map((item, index) => [
+      item.id,
+      {
+        lineNumber: visibleRows[index].position?.lineNumber,
+        order: visibleRows[index].order,
+      },
+    ])
   )
 
   return allRules.map((item) => {
-    const order = orderById.get(item.id)
-    return order === undefined ? item : { ...item, order }
+    const next = orderById.get(item.id)
+    return next === undefined
+      ? item
+      : withDraftOrder(item, next.order, next.lineNumber)
   })
+}
+
+function withDraftOrder<T extends OrderedRule>(
+  item: T,
+  order: number,
+  lineNumber?: number
+): T {
+  if (!item.position) {
+    return { ...item, order }
+  }
+
+  return {
+    ...item,
+    order,
+    position: {
+      ...item.position,
+      lineNumber: lineNumber ?? item.position.lineNumber,
+      saveOrder: order,
+    },
+  }
 }
 
 export function hasExternalChainReference(
@@ -158,5 +210,56 @@ export function stripVolatile(rs: Ruleset) {
   const copy = clone(rs)
   delete copy.raw
   delete copy.warnings
+  delete copy.tables
+  delete copy.diagnostics
+  copy.policies.forEach((policy) => {
+    delete policy.position
+    delete policy.counters
+  })
+  copy.filterRules.forEach((rule) => {
+    delete rule.position
+    delete rule.counters
+    delete rule.sourceLine
+  })
+  copy.natRules.forEach((rule) => {
+    delete rule.position
+    delete rule.counters
+    delete rule.sourceLine
+  })
+  copy.rawRules.forEach((rule) => {
+    delete rule.position
+    delete rule.counters
+  })
   return copy
+}
+
+export function ruleSortValue(
+  rule: Pick<FilterRule | NatRule | RawRule, "order" | "position">
+) {
+  if (rule.position?.saveOrder && rule.position.saveOrder !== rule.order) {
+    return rule.order
+  }
+  return rule.position?.lineNumber ?? rule.position?.saveOrder ?? rule.order
+}
+
+export function chainOrderFor(
+  ruleset: Ruleset,
+  table: TableName,
+  chain: string
+) {
+  const liveOrder = ruleset.tables
+    ?.find((item) => item.name === table)
+    ?.chains.find((item) => item.name === chain)?.order
+  if (liveOrder) return liveOrder
+
+  const builtInIndex = BUILT_IN_CHAINS[table].indexOf(chain)
+  return builtInIndex >= 0 ? builtInIndex + 1 : 999
+}
+
+export function counterLabel(
+  rule: Pick<FilterRule | NatRule | RawRule, "counters">
+) {
+  const packets = rule.counters?.packets ?? 0
+  const bytes = rule.counters?.bytes ?? 0
+  return `${packets}/${bytes}`
 }

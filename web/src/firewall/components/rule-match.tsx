@@ -11,6 +11,9 @@ export function RuleMatch({ rule }: { rule: FilterRule }) {
     ["out", rule.outInterface],
     ["sport", rule.sourcePort],
     ["dport", rule.destinationPort],
+    ["state", rule.state],
+    ["reject", rule.rejectWith],
+    ["log", rule.logPrefix || rule.logLevel],
   ].filter(([, value]) => value)
 
   return (

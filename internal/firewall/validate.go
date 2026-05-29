@@ -69,6 +69,9 @@ func validateFilterRule(prefix string, r Rule, chains map[string]bool) []string 
 	if (r.SourcePort != "" || r.DestinationPort != "") && r.Protocol != "tcp" && r.Protocol != "udp" {
 		errors = append(errors, prefix+" uses ports without tcp/udp protocol")
 	}
+	if r.State != "" && !validStateList(r.State) {
+		errors = append(errors, prefix+" has unsupported connection state")
+	}
 	if r.InInterface != "" && !validInterface(r.InInterface) {
 		errors = append(errors, prefix+" has invalid input interface")
 	}
@@ -94,21 +97,42 @@ func validateNATRule(prefix string, r NatRule, chains map[string]bool) []string 
 		if !allowedProtocol(r.Protocol, false) || (r.Protocol != "tcp" && r.Protocol != "udp") {
 			errors = append(errors, prefix+" port-forward protocol must be tcp or udp")
 		}
-		if !validPort(r.ListenPort) {
+		if r.ListenPort != "" && !validPort(r.ListenPort) {
 			errors = append(errors, prefix+" has invalid listen port")
 		}
-		if !validPort(r.DestinationPort) {
+		if r.DestinationPort != "" && !validPort(r.DestinationPort) {
 			errors = append(errors, prefix+" has invalid destination port")
 		}
 		if !validIP(r.DestinationIP) {
 			errors = append(errors, prefix+" has invalid destination IP")
 		}
 	case "masquerade":
+	case "snat":
+		if r.ToSource == "" {
+			errors = append(errors, prefix+" has missing SNAT destination")
+		}
+	case "redirect":
+		if !allowedProtocol(r.Protocol, true) {
+			errors = append(errors, prefix+" has unsupported protocol")
+		}
+		if r.ListenPort != "" && !validPort(r.ListenPort) {
+			errors = append(errors, prefix+" has invalid listen port")
+		}
+		if r.ToPorts != "" && !validPort(r.ToPorts) {
+			errors = append(errors, prefix+" has invalid redirect port")
+		}
+	case "jump":
+		if r.Target != "RETURN" && !chainExists(chains, r.Target) {
+			errors = append(errors, prefix+" has unsupported NAT target")
+		}
 	default:
 		errors = append(errors, prefix+" has unsupported NAT type")
 	}
 	if r.SourceCIDR != "" && !validCIDROrIP(r.SourceCIDR) {
 		errors = append(errors, prefix+" has invalid source CIDR")
+	}
+	if r.DestinationCIDR != "" && !validCIDROrIP(r.DestinationCIDR) {
+		errors = append(errors, prefix+" has invalid destination CIDR")
 	}
 	if r.InInterface != "" && !validInterface(r.InInterface) {
 		errors = append(errors, prefix+" has invalid input interface")
@@ -141,7 +165,7 @@ func allowedPolicy(v string) bool {
 
 func allowedFilterTarget(v string, chains map[string]bool) bool {
 	switch strings.ToUpper(v) {
-	case "ACCEPT", "DROP", "REJECT", "RETURN":
+	case "ACCEPT", "DROP", "REJECT", "RETURN", "LOG":
 		return true
 	default:
 		return chainExists(chains, v)
@@ -234,10 +258,48 @@ func validIP(v string) bool {
 }
 
 func validPort(v string) bool {
+	if v == "" {
+		return false
+	}
+	for _, item := range strings.Split(v, ",") {
+		if item == "" {
+			return false
+		}
+		start, end, hasRange := strings.Cut(item, ":")
+		if hasRange {
+			if !validSinglePort(start) || !validSinglePort(end) {
+				return false
+			}
+			startNum, _ := strconv.Atoi(start)
+			endNum, _ := strconv.Atoi(end)
+			if startNum > endNum {
+				return false
+			}
+			continue
+		}
+		if !validSinglePort(item) {
+			return false
+		}
+	}
+	return true
+}
+
+func validSinglePort(v string) bool {
 	n, err := strconv.Atoi(v)
 	return err == nil && n >= 1 && n <= 65535
 }
 
 func validInterface(v string) bool {
 	return interfaceNameRE.MatchString(v)
+}
+
+func validStateList(v string) bool {
+	for _, state := range strings.Split(v, ",") {
+		switch strings.ToUpper(strings.TrimSpace(state)) {
+		case "NEW", "ESTABLISHED", "RELATED", "INVALID", "UNTRACKED", "SNAT", "DNAT":
+		default:
+			return false
+		}
+	}
+	return true
 }

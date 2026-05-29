@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import type { ColumnDef } from "@tanstack/react-table"
 import { ChevronDown, ChevronUp, Edit3, Plus, Trash2 } from "lucide-react"
 
-import { DataTable } from "@/components/data-table"
 import { SortableDataTable } from "@/components/sortable-data-table"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -11,10 +10,13 @@ import type { NatRule, RawRule, Ruleset } from "@/types/firewall"
 
 import { ALL_CHAINS_VALUE } from "../constants"
 import {
+  chainOrderFor,
+  counterLabel,
   isBuiltInChain,
   moveRuleByVisibleOrder,
   policyForChain,
   reorderRulesByVisibleDrop,
+  ruleSortValue,
   tableChainNames,
 } from "../rules"
 import {
@@ -26,6 +28,7 @@ import {
 } from "../components/chain-tools"
 import { IconButton } from "../components/icon-button"
 import { StatusBadge } from "../components/status-badge"
+import type { BadgeTone, TFunction } from "../types"
 
 export function NatPanel({
   ruleset,
@@ -42,33 +45,24 @@ export function NatPanel({
   const chains = useMemo(() => tableChainNames(ruleset, "nat"), [ruleset])
   const [chainFilter, setChainFilter] = useState(ALL_CHAINS_VALUE)
   const sortedRows = useMemo(
-    () => [...ruleset.natRules].sort((a, b) => a.order - b.order),
-    [ruleset.natRules]
-  )
-  const rawRows = useMemo(
-    () =>
-      [...ruleset.rawRules]
-        .filter((rule) => rule.table === "nat")
-        .sort((a, b) => a.order - b.order),
-    [ruleset.rawRules]
+    () => natDisplayRows(ruleset),
+    [ruleset]
   )
   const chainSections = useMemo(
     () =>
       chains.map((chain) => {
         const rows = sortedRows.filter((rule) => rule.chain === chain)
-        const readOnlyRows = rawRows.filter((rule) => rule.chain === chain)
 
         return {
           chain,
           builtIn: isBuiltInChain("nat", chain),
-          count: rows.length,
-          rawCount: readOnlyRows.length,
+          count: rows.filter((row) => row.kind === "nat").length,
+          rawCount: rows.filter((row) => row.kind === "raw").length,
           policy: policyForChain(ruleset, "nat", chain),
           rows,
-          rawRows: readOnlyRows,
         }
       }),
-    [chains, rawRows, ruleset, sortedRows]
+    [chains, ruleset, sortedRows]
   )
   const visibleSections = useMemo(() => {
     if (chainFilter !== ALL_CHAINS_VALUE) {
@@ -128,41 +122,59 @@ export function NatPanel({
   )
 
   const columnsForRows = useCallback(
-    (sectionRows: NatRule[]): ColumnDef<NatRule>[] => [
+    (sectionRows: NatDisplayRow[]): ColumnDef<NatDisplayRow>[] => [
       {
         header: t("columnOrder"),
         cell: ({ row }) => (
-          <span className="font-mono text-xs text-muted-foreground">
-            {row.original.order}
-          </span>
+          <div className="grid gap-0.5 font-mono text-xs text-muted-foreground">
+            <span>{row.original.position?.lineNumber ?? row.original.order}</span>
+            <span>{counterLabel(row.original)}</span>
+          </div>
         ),
-        size: 72,
+        size: 86,
       },
       {
         header: t("columnType"),
-        cell: ({ row }) => (
-          <StatusBadge
-            tone={row.original.type === "port-forward" ? "warning" : "success"}
-          >
-            {row.original.type === "port-forward"
-              ? t("portForwardTitle")
-              : "MASQUERADE"}
-          </StatusBadge>
-        ),
+        cell: ({ row }) =>
+          row.original.kind === "nat" ? (
+            <StatusBadge tone={natTone(row.original.rule)}>
+              {natLabel(row.original.rule, t)}
+            </StatusBadge>
+          ) : (
+            <Badge variant="outline">{t("readOnlyRules")}</Badge>
+          ),
         size: 130,
       },
       {
         header: t("columnMatch"),
         cell: ({ row }) =>
-          row.original.type === "port-forward" ? (
+          row.original.kind === "raw" ? (
+            <code className="block min-w-80 font-mono text-xs whitespace-nowrap">
+              {row.original.rule.line}
+            </code>
+          ) : row.original.rule.type === "port-forward" ? (
             <span className="font-mono text-xs">
-              {row.original.protocol}/{row.original.listenPort} -&gt;{" "}
-              {row.original.destinationIp}:{row.original.destinationPort}
+              {row.original.rule.protocol}/{row.original.rule.listenPort} -&gt;{" "}
+              {row.original.rule.toDestination ||
+                `${row.original.rule.destinationIp}:${row.original.rule.destinationPort}`}
+            </span>
+          ) : row.original.rule.type === "snat" ? (
+            <span className="font-mono text-xs">
+              SNAT -&gt; {row.original.rule.toSource}
+            </span>
+          ) : row.original.rule.type === "redirect" ? (
+            <span className="font-mono text-xs">
+              REDIRECT {row.original.rule.listenPort || "*"} -&gt;{" "}
+              {row.original.rule.toPorts || "*"}
+            </span>
+          ) : row.original.rule.type === "jump" ? (
+            <span className="font-mono text-xs">
+              -j {row.original.rule.target}
             </span>
           ) : (
             <span className="font-mono text-xs">
-              {t("sourceLabel")} {row.original.sourceCidr || t("any")} -&gt;{" "}
-              {row.original.outInterface || t("anyInterface")}
+              {t("sourceLabel")} {row.original.rule.sourceCidr || t("any")}{" "}
+              -&gt; {row.original.rule.outInterface || t("anyInterface")}
             </span>
           ),
       },
@@ -170,11 +182,15 @@ export function NatPanel({
         header: t("columnScope"),
         cell: ({ row }) => (
           <span className="font-mono text-xs text-muted-foreground">
-            {row.original.inInterface ? `in:${row.original.inInterface} ` : ""}
-            {row.original.outInterface
-              ? `out:${row.original.outInterface} `
+            {row.original.kind === "nat" && row.original.rule.inInterface
+              ? `in:${row.original.rule.inInterface} `
               : ""}
-            {row.original.sourceCidr ? `src:${row.original.sourceCidr}` : ""}
+            {row.original.kind === "nat" && row.original.rule.outInterface
+              ? `out:${row.original.rule.outInterface} `
+              : ""}
+            {row.original.kind === "nat" && row.original.rule.sourceCidr
+              ? `src:${row.original.rule.sourceCidr}`
+              : ""}
           </span>
         ),
       },
@@ -182,41 +198,55 @@ export function NatPanel({
         header: t("columnComment"),
         cell: ({ row }) => (
           <span className="font-mono text-xs text-muted-foreground">
-            {row.original.comment || "-"}
+            {row.original.kind === "nat"
+              ? row.original.rule.comment || "-"
+              : row.original.rule.reason}
           </span>
         ),
       },
       {
         header: t("columnActions"),
         cell: ({ row }) => {
-          const index = sectionRows.findIndex(
-            (item) => item.id === row.original.id
+          const current = row.original
+          if (current.kind === "raw") {
+            return (
+              <div className="flex justify-end">
+                <Badge variant="secondary">{t("readOnlyRules")}</Badge>
+              </div>
+            )
+          }
+
+          const editableRows = sectionRows
+            .filter((item): item is NatEditableRow => item.kind === "nat")
+            .map((item) => item.rule)
+          const index = editableRows.findIndex(
+            (item) => item.id === current.rule.id
           )
           return (
             <div className="flex items-center justify-end gap-1">
               <IconButton
                 label={t("moveNatRuleUp")}
-                onClick={() => move(row.original, -1, sectionRows)}
+                onClick={() => move(current.rule, -1, editableRows)}
                 disabled={index <= 0}
               >
                 <ChevronUp className="size-4" />
               </IconButton>
               <IconButton
                 label={t("moveNatRuleDown")}
-                onClick={() => move(row.original, 1, sectionRows)}
-                disabled={index >= sectionRows.length - 1}
+                onClick={() => move(current.rule, 1, editableRows)}
+                disabled={index >= editableRows.length - 1}
               >
                 <ChevronDown className="size-4" />
               </IconButton>
               <IconButton
                 label={t("editNatRule")}
-                onClick={() => onEdit(row.original)}
+                onClick={() => onEdit(current.rule)}
               >
                 <Edit3 className="size-4" />
               </IconButton>
               <IconButton
                 label={t("deleteNatRule")}
-                onClick={() => remove(row.original)}
+                onClick={() => remove(current.rule)}
               >
                 <Trash2 className="size-4" />
               </IconButton>
@@ -228,36 +258,6 @@ export function NatPanel({
     ],
     [move, onEdit, remove, t]
   )
-  const rawColumns = useMemo<ColumnDef<RawRule>[]>(
-    () => [
-      {
-        header: t("columnOrder"),
-        cell: ({ row }) => (
-          <span className="font-mono text-xs text-muted-foreground">
-            {row.original.order}
-          </span>
-        ),
-        size: 72,
-      },
-      {
-        header: t("columnLine"),
-        cell: ({ row }) => (
-          <code className="block min-w-80 font-mono text-xs whitespace-nowrap">
-            {row.original.line}
-          </code>
-        ),
-      },
-      {
-        header: t("columnReason"),
-        cell: ({ row }) => (
-          <span className="text-sm text-muted-foreground">
-            {row.original.reason}
-          </span>
-        ),
-      },
-    ],
-    [t]
-  )
 
   return (
     <section className="grid items-start gap-4 xl:grid-cols-[15rem_minmax(0,1fr)_20rem]">
@@ -266,7 +266,7 @@ export function NatPanel({
         description={t("chainDirectoryDescription")}
         items={chainSections}
         activeValue={chainFilter}
-        allCount={sortedRows.length + rawRows.length}
+        allCount={sortedRows.length}
         onValueChange={setChainFilter}
       />
 
@@ -301,7 +301,7 @@ export function NatPanel({
         </div>
 
         <div className="grid gap-4">
-          {visibleSections.map((section) => (
+          {visibleSections.length ? visibleSections.map((section) => (
             <section
               key={section.chain}
               className="overflow-hidden rounded-lg border bg-card"
@@ -347,33 +347,24 @@ export function NatPanel({
                     empty={t("noRulesInChain")}
                     dragLabel={t("dragRuleToReorder")}
                     getRowId={(row) => row.id}
+                    canDragRow={(row) => row.kind === "nat"}
                     onReorder={(activeId, overId) =>
-                      reorder(activeId, overId, section.rows)
+                      reorder(
+                        activeId,
+                        overId,
+                        section.rows
+                          .filter(
+                            (item): item is NatEditableRow =>
+                              item.kind === "nat"
+                          )
+                          .map((item) => item.rule)
+                      )
                     }
                     ariaLabel={`${section.chain} ${t("natRulesTitle")}`}
                     density="compact"
                   />
                 ) : null}
-                {section.rawRows.length ? (
-                  <div className="grid gap-2">
-                    <div className="flex items-center justify-between gap-3">
-                      <h4 className="text-sm font-medium tracking-normal">
-                        {t("readOnlyRules")}
-                      </h4>
-                      <Badge variant="secondary">
-                        {t("readOnlyCount", { count: section.rawRows.length })}
-                      </Badge>
-                    </div>
-                    <DataTable
-                      data={section.rawRows}
-                      columns={rawColumns}
-                      empty={t("noUnsupportedRules")}
-                      ariaLabel={`${section.chain} ${t("natRawTitle")}`}
-                      density="compact"
-                    />
-                  </div>
-                ) : null}
-                {!section.rows.length && !section.rawRows.length ? (
+                {!section.rows.length ? (
                   <ChainEmptyState
                     message={t("noRulesInChain")}
                     actionLabel={t("addRule")}
@@ -382,7 +373,9 @@ export function NatPanel({
                 ) : null}
               </div>
             </section>
-          ))}
+          )) : (
+            <ChainEmptyState message={t("noNatRules")} />
+          )}
         </div>
       </div>
 
@@ -400,4 +393,87 @@ export function NatPanel({
       </aside>
     </section>
   )
+}
+
+type NatEditableRow = {
+  id: string
+  kind: "nat"
+  chain: string
+  order: number
+  position: NatRule["position"]
+  counters: NatRule["counters"]
+  rule: NatRule
+}
+
+type NatRawRow = {
+  id: string
+  kind: "raw"
+  chain: string
+  order: number
+  position: RawRule["position"]
+  counters: RawRule["counters"]
+  rule: RawRule
+}
+
+type NatDisplayRow = NatEditableRow | NatRawRow
+
+function natDisplayRows(ruleset: Ruleset): NatDisplayRow[] {
+  const rows: NatDisplayRow[] = [
+    ...ruleset.natRules.map((rule) => ({
+      id: rule.id,
+      kind: "nat" as const,
+      chain: rule.chain,
+      order: rule.order,
+      position: rule.position,
+      counters: rule.counters,
+      rule,
+    })),
+    ...ruleset.rawRules
+      .filter((rule) => rule.table === "nat")
+      .map((rule) => ({
+        id: rule.id,
+        kind: "raw" as const,
+        chain: rule.chain || "",
+        order: rule.order,
+        position: rule.position,
+        counters: rule.counters,
+        rule,
+      })),
+  ]
+
+  return rows.sort(
+    (a, b) =>
+      chainOrderFor(ruleset, "nat", a.chain) -
+        chainOrderFor(ruleset, "nat", b.chain) ||
+      ruleSortValue(a) - ruleSortValue(b)
+  )
+}
+
+function natTone(rule: NatRule): BadgeTone {
+  switch (rule.type) {
+    case "masquerade":
+    case "snat":
+      return "success"
+    case "jump":
+      return "muted"
+    default:
+      return "warning"
+  }
+}
+
+function natLabel(rule: NatRule, t: TFunction) {
+  switch (rule.type) {
+    case "port-forward":
+      return t("portForwardTitle")
+    case "masquerade":
+      return "MASQUERADE"
+    case "snat":
+      return "SNAT"
+    case "redirect":
+      return "REDIRECT"
+    case "jump":
+      return rule.target || "JUMP"
+    default:
+      return rule.type
+  }
 }

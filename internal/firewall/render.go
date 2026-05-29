@@ -12,14 +12,15 @@ func RenderRuleset(rs Ruleset) (string, error) {
 	}
 
 	var out strings.Builder
-	renderTable(&out, "filter", rs)
-	renderTable(&out, "nat", rs)
-	renderRawOnlyTables(&out, rs.RawRules)
+	for _, table := range supportedTablesToRender(rs) {
+		renderTable(&out, table, rs)
+	}
+	renderRawOnlyTables(&out, rs)
 	return out.String(), nil
 }
 
 func renderTable(out *strings.Builder, table string, rs Ruleset) {
-	if table == "nat" && len(rs.NatRules) == 0 && countRawForTable(rs.RawRules, table) == 0 && countPoliciesForTable(rs.Policies, table) == 0 {
+	if !shouldRenderSupportedTable(table, rs) {
 		return
 	}
 
@@ -54,17 +55,17 @@ func tableEntries(table string, rs Ruleset) []renderEntry {
 	var entries []renderEntry
 	for _, rule := range rs.FilterRules {
 		if rule.Table == table {
-			entries = append(entries, renderEntry{order: rule.Order, line: renderFilterRule(rule)})
+			entries = append(entries, renderEntry{order: renderOrder(rule.Order, rule.Position), line: renderFilterRule(rule)})
 		}
 	}
 	for _, rule := range rs.NatRules {
 		if rule.Table == table {
-			entries = append(entries, renderEntry{order: rule.Order, line: renderNATRule(rule)})
+			entries = append(entries, renderEntry{order: renderOrder(rule.Order, rule.Position), line: renderNATRule(rule)})
 		}
 	}
 	for _, rule := range rs.RawRules {
 		if rule.Table == table {
-			entries = append(entries, renderEntry{order: rule.Order, line: rule.Line})
+			entries = append(entries, renderEntry{order: renderOrder(rule.Order, rule.Position), line: rule.Line})
 		}
 	}
 	return entries
@@ -75,9 +76,27 @@ func renderFilterRule(r Rule) string {
 	b.WriteString("-A ")
 	b.WriteString(r.Chain)
 	writeCommonMatch(&b, r.Protocol, r.Source, r.Destination, r.InInterface, r.OutInterface, r.SourcePort, r.DestinationPort)
+	if r.State != "" {
+		b.WriteString(" -m conntrack --ctstate ")
+		b.WriteString(r.State)
+	}
 	writeComment(&b, r.Comment)
 	b.WriteString(" -j ")
 	b.WriteString(r.Target)
+	if r.Target == "REJECT" && r.RejectWith != "" {
+		b.WriteString(" --reject-with ")
+		b.WriteString(r.RejectWith)
+	}
+	if r.Target == "LOG" {
+		if r.LogPrefix != "" {
+			b.WriteString(" --log-prefix ")
+			b.WriteString(quoteToken(r.LogPrefix))
+		}
+		if r.LogLevel != "" {
+			b.WriteString(" --log-level ")
+			b.WriteString(r.LogLevel)
+		}
+	}
 	return b.String()
 }
 
@@ -86,17 +105,51 @@ func renderNATRule(r NatRule) string {
 	b.WriteString("-A ")
 	b.WriteString(r.Chain)
 	if r.Type == "port-forward" {
-		writeCommonMatch(&b, r.Protocol, r.SourceCIDR, "", r.InInterface, r.OutInterface, "", r.ListenPort)
+		writeCommonMatch(&b, r.Protocol, r.SourceCIDR, r.DestinationCIDR, r.InInterface, r.OutInterface, "", r.ListenPort)
 		writeComment(&b, r.Comment)
 		b.WriteString(" -j DNAT --to-destination ")
-		b.WriteString(r.DestinationIP)
-		b.WriteString(":")
-		b.WriteString(r.DestinationPort)
+		if r.ToDestination != "" {
+			b.WriteString(r.ToDestination)
+		} else {
+			b.WriteString(r.DestinationIP)
+			if r.DestinationPort != "" {
+				b.WriteString(":")
+				b.WriteString(r.DestinationPort)
+			}
+		}
 		return b.String()
 	}
-	writeCommonMatch(&b, "", r.SourceCIDR, "", "", r.OutInterface, "", "")
+	if r.Type == "snat" {
+		writeCommonMatch(&b, r.Protocol, r.SourceCIDR, r.DestinationCIDR, r.InInterface, r.OutInterface, "", r.ListenPort)
+		writeComment(&b, r.Comment)
+		b.WriteString(" -j SNAT --to-source ")
+		b.WriteString(r.ToSource)
+		return b.String()
+	}
+	if r.Type == "redirect" {
+		writeCommonMatch(&b, r.Protocol, r.SourceCIDR, r.DestinationCIDR, r.InInterface, r.OutInterface, "", r.ListenPort)
+		writeComment(&b, r.Comment)
+		b.WriteString(" -j REDIRECT")
+		if r.ToPorts != "" {
+			b.WriteString(" --to-ports ")
+			b.WriteString(r.ToPorts)
+		}
+		return b.String()
+	}
+	if r.Type == "jump" {
+		writeCommonMatch(&b, r.Protocol, r.SourceCIDR, r.DestinationCIDR, r.InInterface, r.OutInterface, "", r.ListenPort)
+		writeComment(&b, r.Comment)
+		b.WriteString(" -j ")
+		b.WriteString(r.Target)
+		return b.String()
+	}
+	writeCommonMatch(&b, "", r.SourceCIDR, r.DestinationCIDR, "", r.OutInterface, "", "")
 	writeComment(&b, r.Comment)
 	b.WriteString(" -j MASQUERADE")
+	if r.ToPorts != "" {
+		b.WriteString(" --to-ports ")
+		b.WriteString(r.ToPorts)
+	}
 	return b.String()
 }
 
@@ -241,9 +294,9 @@ func countPoliciesForTable(policies []Policy, table string) int {
 	return count
 }
 
-func renderRawOnlyTables(out *strings.Builder, rawRules []RawRule) {
+func renderRawOnlyTables(out *strings.Builder, rs Ruleset) {
 	byTable := map[string][]RawRule{}
-	for _, rule := range rawRules {
+	for _, rule := range rs.RawRules {
 		if rule.Table == "filter" || rule.Table == "nat" {
 			continue
 		}
@@ -254,7 +307,14 @@ func renderRawOnlyTables(out *strings.Builder, rawRules []RawRule) {
 	for table := range byTable {
 		tables = append(tables, table)
 	}
-	sort.Strings(tables)
+	sort.SliceStable(tables, func(i, j int) bool {
+		left := tableOrderForRender(rs, tables[i])
+		right := tableOrderForRender(rs, tables[j])
+		if left == right {
+			return tables[i] < tables[j]
+		}
+		return left < right
+	})
 
 	for _, table := range tables {
 		rules := byTable[table]
@@ -269,5 +329,59 @@ func renderRawOnlyTables(out *strings.Builder, rawRules []RawRule) {
 			out.WriteString("\n")
 		}
 		out.WriteString("COMMIT\n")
+	}
+}
+
+func supportedTablesToRender(rs Ruleset) []string {
+	tables := []string{}
+	for _, table := range []string{"filter", "nat"} {
+		if shouldRenderSupportedTable(table, rs) {
+			tables = append(tables, table)
+		}
+	}
+	sort.SliceStable(tables, func(i, j int) bool {
+		return tableOrderForRender(rs, tables[i]) < tableOrderForRender(rs, tables[j])
+	})
+	return tables
+}
+
+func shouldRenderSupportedTable(table string, rs Ruleset) bool {
+	if countPoliciesForTable(rs.Policies, table) > 0 || countRawForTable(rs.RawRules, table) > 0 {
+		return true
+	}
+	if table == "filter" && len(rs.FilterRules) > 0 {
+		return true
+	}
+	if table == "nat" && len(rs.NatRules) > 0 {
+		return true
+	}
+	for _, info := range rs.Tables {
+		if info.Name == table && info.Present {
+			return true
+		}
+	}
+	return false
+}
+
+func renderOrder(order int, position RulePosition) int {
+	if order > 0 {
+		return order
+	}
+	return position.SaveOrder
+}
+
+func tableOrderForRender(rs Ruleset, table string) int {
+	for _, info := range rs.Tables {
+		if info.Name == table && info.Order > 0 {
+			return info.Order
+		}
+	}
+	switch table {
+	case "filter":
+		return 10
+	case "nat":
+		return 20
+	default:
+		return 1000
 	}
 }

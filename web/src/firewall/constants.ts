@@ -16,9 +16,11 @@ export const COMMANDS_UNAVAILABLE_MESSAGE = "iptables commands unavailable"
 
 export const emptyRuleset: Ruleset = {
   snapshotId: "",
+  tables: [],
   policies: [],
   filterRules: [],
   natRules: [],
   rawRules: [],
   warnings: [],
+  diagnostics: { commands: [] },
 }

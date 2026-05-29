@@ -6,14 +6,17 @@ import { SortableDataTable } from "@/components/sortable-data-table"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { useI18n } from "@/lib/i18n"
-import type { FilterRule, Ruleset } from "@/types/firewall"
+import type { FilterRule, RawRule, Ruleset } from "@/types/firewall"
 
 import { ALL_CHAINS_VALUE } from "../constants"
 import {
+  chainOrderFor,
+  counterLabel,
   isBuiltInChain,
   moveRuleByVisibleOrder,
   policyForChain,
   reorderRulesByVisibleDrop,
+  ruleSortValue,
   tableChainNames,
 } from "../rules"
 import {
@@ -43,18 +46,22 @@ export function FilterRulesPanel({
   const chains = useMemo(() => tableChainNames(ruleset, "filter"), [ruleset])
   const [chainFilter, setChainFilter] = useState(ALL_CHAINS_VALUE)
   const sortedRows = useMemo(
-    () => [...ruleset.filterRules].sort((a, b) => a.order - b.order),
-    [ruleset.filterRules]
+    () => filterDisplayRows(ruleset),
+    [ruleset]
   )
   const chainSections = useMemo(
     () =>
-      chains.map((chain) => ({
-        chain,
-        builtIn: isBuiltInChain("filter", chain),
-        count: sortedRows.filter((rule) => rule.chain === chain).length,
-        policy: policyForChain(ruleset, "filter", chain),
-        rows: sortedRows.filter((rule) => rule.chain === chain),
-      })),
+      chains.map((chain) => {
+        const rows = sortedRows.filter((rule) => rule.chain === chain)
+        return {
+          chain,
+          builtIn: isBuiltInChain("filter", chain),
+          count: rows.filter((row) => row.kind === "filter").length,
+          rawCount: rows.filter((row) => row.kind === "raw").length,
+          policy: policyForChain(ruleset, "filter", chain),
+          rows,
+        }
+      }),
     [chains, ruleset, sortedRows]
   )
   const visibleSections = useMemo(() => {
@@ -114,69 +121,94 @@ export function FilterRulesPanel({
     [onChange, ruleset]
   )
 
-  const columnsForRows = useCallback(
-    (sectionRows: FilterRule[]): ColumnDef<FilterRule>[] => [
+  const columnsForDisplayRows = useCallback(
+    (sectionRows: FilterDisplayRow[]): ColumnDef<FilterDisplayRow>[] => [
       {
         header: t("columnOrder"),
         cell: ({ row }) => (
-          <span className="font-mono text-xs text-muted-foreground">
-            {row.original.order}
-          </span>
+          <div className="grid gap-0.5 font-mono text-xs text-muted-foreground">
+            <span>{row.original.position?.lineNumber ?? row.original.order}</span>
+            <span>{counterLabel(row.original)}</span>
+          </div>
         ),
-        size: 72,
+        size: 86,
       },
       {
         header: t("columnTarget"),
-        cell: ({ row }) => (
-          <StatusBadge tone={targetTone(row.original.target)}>
-            {row.original.target}
-          </StatusBadge>
-        ),
-        size: 96,
+        cell: ({ row }) =>
+          row.original.kind === "filter" ? (
+            <StatusBadge tone={targetTone(row.original.rule.target)}>
+              {row.original.rule.target}
+            </StatusBadge>
+          ) : (
+            <Badge variant="outline">{t("readOnlyRules")}</Badge>
+          ),
+        size: 120,
       },
       {
         header: t("columnMatch"),
-        cell: ({ row }) => <RuleMatch rule={row.original} />,
+        cell: ({ row }) =>
+          row.original.kind === "filter" ? (
+            <RuleMatch rule={row.original.rule} />
+          ) : (
+            <code className="block min-w-80 font-mono text-xs whitespace-nowrap">
+              {row.original.rule.line}
+            </code>
+          ),
       },
       {
         header: t("columnComment"),
         cell: ({ row }) => (
           <span className="font-mono text-xs text-muted-foreground">
-            {row.original.comment || "-"}
+            {row.original.kind === "filter"
+              ? row.original.rule.comment || "-"
+              : row.original.rule.reason}
           </span>
         ),
       },
       {
         header: t("columnActions"),
         cell: ({ row }) => {
-          const index = sectionRows.findIndex(
-            (item) => item.id === row.original.id
+          const current = row.original
+          if (current.kind === "raw") {
+            return (
+              <div className="flex justify-end">
+                <Badge variant="secondary">{t("readOnlyRules")}</Badge>
+              </div>
+            )
+          }
+
+          const editableRows = sectionRows
+            .filter((item): item is FilterEditableRow => item.kind === "filter")
+            .map((item) => item.rule)
+          const index = editableRows.findIndex(
+            (item) => item.id === current.rule.id
           )
           return (
             <div className="flex items-center justify-end gap-1">
               <IconButton
                 label={t("moveRuleUp")}
-                onClick={() => move(row.original, -1, sectionRows)}
+                onClick={() => move(current.rule, -1, editableRows)}
                 disabled={index <= 0}
               >
                 <ChevronUp className="size-4" />
               </IconButton>
               <IconButton
                 label={t("moveRuleDown")}
-                onClick={() => move(row.original, 1, sectionRows)}
-                disabled={index >= sectionRows.length - 1}
+                onClick={() => move(current.rule, 1, editableRows)}
+                disabled={index >= editableRows.length - 1}
               >
                 <ChevronDown className="size-4" />
               </IconButton>
               <IconButton
                 label={t("editRule")}
-                onClick={() => onEdit(row.original)}
+                onClick={() => onEdit(current.rule)}
               >
                 <Edit3 className="size-4" />
               </IconButton>
               <IconButton
                 label={t("deleteRule")}
-                onClick={() => remove(row.original)}
+                onClick={() => remove(current.rule)}
               >
                 <Trash2 className="size-4" />
               </IconButton>
@@ -231,7 +263,7 @@ export function FilterRulesPanel({
         </div>
 
         <div className="grid gap-4">
-          {visibleSections.map((section) => (
+          {visibleSections.length ? visibleSections.map((section) => (
             <section
               key={section.chain}
               className="overflow-hidden rounded-lg border bg-card"
@@ -255,6 +287,9 @@ export function FilterRulesPanel({
                   </div>
                   <p className="mt-1 text-sm text-muted-foreground">
                     {t("chainRuleCount", { count: section.count })}
+                    {section.rawCount
+                      ? ` / ${t("readOnlyCount", { count: section.rawCount })}`
+                      : ""}
                   </p>
                 </div>
                 <Button
@@ -270,12 +305,22 @@ export function FilterRulesPanel({
                 {section.rows.length ? (
                   <SortableDataTable
                     data={section.rows}
-                    columns={columnsForRows(section.rows)}
+                    columns={columnsForDisplayRows(section.rows)}
                     empty={t("noRulesInChain")}
                     dragLabel={t("dragRuleToReorder")}
                     getRowId={(row) => row.id}
+                    canDragRow={(row) => row.kind === "filter"}
                     onReorder={(activeId, overId) =>
-                      reorder(activeId, overId, section.rows)
+                      reorder(
+                        activeId,
+                        overId,
+                        section.rows
+                          .filter(
+                            (item): item is FilterEditableRow =>
+                              item.kind === "filter"
+                          )
+                          .map((item) => item.rule)
+                      )
                     }
                     ariaLabel={`${section.chain} ${t("filterRulesTitle")}`}
                     density="compact"
@@ -289,7 +334,9 @@ export function FilterRulesPanel({
                 )}
               </div>
             </section>
-          ))}
+          )) : (
+            <ChainEmptyState message={t("noFilterRules")} />
+          )}
         </div>
       </div>
 
@@ -306,5 +353,59 @@ export function FilterRulesPanel({
         <ChainManager ruleset={ruleset} onChange={onChange} table="filter" />
       </aside>
     </section>
+  )
+}
+
+type FilterEditableRow = {
+  id: string
+  kind: "filter"
+  chain: string
+  order: number
+  position: FilterRule["position"]
+  counters: FilterRule["counters"]
+  rule: FilterRule
+}
+
+type FilterRawRow = {
+  id: string
+  kind: "raw"
+  chain: string
+  order: number
+  position: RawRule["position"]
+  counters: RawRule["counters"]
+  rule: RawRule
+}
+
+type FilterDisplayRow = FilterEditableRow | FilterRawRow
+
+function filterDisplayRows(ruleset: Ruleset): FilterDisplayRow[] {
+  const rows: FilterDisplayRow[] = [
+    ...ruleset.filterRules.map((rule) => ({
+      id: rule.id,
+      kind: "filter" as const,
+      chain: rule.chain,
+      order: rule.order,
+      position: rule.position,
+      counters: rule.counters,
+      rule,
+    })),
+    ...ruleset.rawRules
+      .filter((rule) => rule.table === "filter")
+      .map((rule) => ({
+        id: rule.id,
+        kind: "raw" as const,
+        chain: rule.chain || "",
+        order: rule.order,
+        position: rule.position,
+        counters: rule.counters,
+        rule,
+      })),
+  ]
+
+  return rows.sort(
+    (a, b) =>
+      chainOrderFor(ruleset, "filter", a.chain) -
+        chainOrderFor(ruleset, "filter", b.chain) ||
+      ruleSortValue(a) - ruleSortValue(b)
   )
 }

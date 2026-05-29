@@ -40,7 +40,7 @@ export function FilterRuleDialog({
   const { t, translateValidationMessage } = useI18n()
   const existing = editor?.mode === "edit" ? editor.rule : undefined
   const chainOptions = useMemo(
-    () => tableChainNames(ruleset, "filter"),
+    () => tableChainNames(ruleset, "filter", { includeDefaults: true }),
     [ruleset]
   )
   const targetOptions = useMemo(
@@ -88,9 +88,14 @@ export function FilterRuleDialog({
       outInterface: compact(value.outInterface),
       sourcePort: compact(value.sourcePort),
       destinationPort: compact(value.destinationPort),
+      state: existing?.state,
+      rejectWith: existing?.rejectWith,
+      logPrefix: existing?.logPrefix,
+      logLevel: existing?.logLevel,
       comment: compact(value.comment),
       order: existing?.order ?? nextOrderValue,
       readOnly: false,
+      extra: existing?.extra,
     })
   }
 

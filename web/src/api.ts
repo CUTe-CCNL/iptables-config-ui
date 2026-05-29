@@ -3,6 +3,7 @@ import type {
   NatRule,
   Policy,
   RawRule,
+  TableInfo,
   RulesResponse,
   Ruleset,
   SystemStatus,
@@ -90,11 +91,16 @@ export function normalizeRulesResponse(response: RulesResponse): RulesResponse {
 export function normalizeRuleset(ruleset: Ruleset): Ruleset {
   return {
     ...ruleset,
+    tables: arrayOrEmpty<TableInfo>(ruleset.tables),
     policies: arrayOrEmpty<Policy>(ruleset.policies),
     filterRules: arrayOrEmpty<FilterRule>(ruleset.filterRules),
     natRules: arrayOrEmpty<NatRule>(ruleset.natRules),
     rawRules: arrayOrEmpty<RawRule>(ruleset.rawRules),
     warnings: arrayOrEmpty<string>(ruleset.warnings),
+    diagnostics: {
+      ...ruleset.diagnostics,
+      commands: arrayOrEmpty(ruleset.diagnostics?.commands),
+    },
   }
 }
 

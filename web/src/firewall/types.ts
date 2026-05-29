@@ -1,7 +1,7 @@
 import type { useI18n } from "@/lib/i18n"
 import type { FilterRule, NatRule } from "@/types/firewall"
 
-export type Tab = "overview" | "filter" | "nat" | "raw"
+export type Tab = "overview" | "filter" | "nat" | "raw" | "diagnostics"
 export type TableName = "filter" | "nat"
 export type ConfirmAction = "apply" | "rollback" | "shutdown" | "refresh" | null
 export type FilterEditor =
@@ -41,7 +41,11 @@ export type NatRuleFormState = {
   destinationIp: string
   destinationPort: string
   sourceCidr: string
+  destinationCidr: string
   inInterface: string
   outInterface: string
+  target: string
+  toSource: string
+  toPorts: string
   comment: string
 }

@@ -13,14 +13,14 @@ func TestParseMockRules(t *testing.T) {
 	if rs.SnapshotID == "" {
 		t.Fatal("expected snapshot id")
 	}
-	if len(rs.FilterRules) != 4 {
-		t.Fatalf("expected 4 supported filter rules, got %d", len(rs.FilterRules))
+	if len(rs.FilterRules) != 5 {
+		t.Fatalf("expected 5 supported filter rules, got %d", len(rs.FilterRules))
 	}
 	if len(rs.NatRules) != 2 {
 		t.Fatalf("expected 2 supported nat rules, got %d", len(rs.NatRules))
 	}
-	if len(rs.RawRules) != 1 {
-		t.Fatalf("expected 1 read-only raw rule, got %d", len(rs.RawRules))
+	if len(rs.RawRules) != 0 {
+		t.Fatalf("expected no read-only raw rules, got %d", len(rs.RawRules))
 	}
 	if rs.NatRules[0].DestinationIP != "10.0.0.20" || rs.NatRules[0].DestinationPort != "443" {
 		t.Fatalf("unexpected DNAT destination: %#v", rs.NatRules[0])
@@ -62,7 +62,7 @@ func TestRenderPreservesReadOnlyRawRules(t *testing.T) {
 		t.Fatalf("RenderRuleset: %v", err)
 	}
 	for _, want := range []string{
-		`-A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT`,
+		`-A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT`,
 		`-A PREROUTING -p tcp -m tcp --dport 8443 -j DNAT --to-destination 10.0.0.20:443`,
 		`-A POSTROUTING -s 10.0.0.0/24 -o eth0 -j MASQUERADE`,
 	} {
@@ -167,14 +167,17 @@ COMMIT
 	if result := ValidateRuleset(rs); !result.Valid {
 		t.Fatalf("custom NAT chain should validate, got errors %#v", result.Errors)
 	}
-	if len(rs.NatRules) != 2 {
-		t.Fatalf("expected 2 structured NAT rules, got %#v", rs.NatRules)
+	if len(rs.NatRules) != 3 {
+		t.Fatalf("expected 3 structured NAT rules, got %#v", rs.NatRules)
 	}
-	if rs.NatRules[0].Chain != "MYNAT" || rs.NatRules[1].Chain != "MYNAT" {
+	if rs.NatRules[0].Type != "jump" || rs.NatRules[0].Target != "MYNAT" {
+		t.Fatalf("expected structured NAT jump, got %#v", rs.NatRules[0])
+	}
+	if rs.NatRules[1].Chain != "MYNAT" || rs.NatRules[2].Chain != "MYNAT" {
 		t.Fatalf("expected NAT rules in MYNAT, got %#v", rs.NatRules)
 	}
-	if len(rs.RawRules) != 1 || rs.RawRules[0].Line != "-A PREROUTING -j MYNAT" {
-		t.Fatalf("expected unsupported NAT jump preserved as raw, got %#v", rs.RawRules)
+	if len(rs.RawRules) != 0 {
+		t.Fatalf("expected no raw NAT rules, got %#v", rs.RawRules)
 	}
 	rendered, err := RenderRuleset(rs)
 	if err != nil {
@@ -220,6 +223,97 @@ func TestValidateRulesetRejectsUndeclaredChainReferences(t *testing.T) {
 		if !found {
 			t.Fatalf("expected error %q, got %#v", want, result.Errors)
 		}
+	}
+}
+
+func TestParseDoesNotInventMissingNATTable(t *testing.T) {
+	raw := `*filter
+:INPUT ACCEPT [0:0]
+:FORWARD ACCEPT [0:0]
+:OUTPUT ACCEPT [0:0]
+COMMIT
+`
+	rs, err := ParseRuleset(raw)
+	if err != nil {
+		t.Fatalf("ParseRuleset: %v", err)
+	}
+	for _, policy := range rs.Policies {
+		if policy.Table == "nat" {
+			t.Fatalf("did not expect synthetic nat policy: %#v", rs.Policies)
+		}
+	}
+	for _, table := range rs.Tables {
+		if table.Name == "nat" {
+			t.Fatalf("did not expect synthetic nat table: %#v", rs.Tables)
+		}
+	}
+}
+
+func TestApplyDiagnosticsAddsLineNumbersAndCounters(t *testing.T) {
+	raw := `*filter
+:INPUT ACCEPT [0:0]
+-A INPUT -j ACCEPT
+-A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+COMMIT
+`
+	rs, err := ParseRuleset(raw)
+	if err != nil {
+		t.Fatalf("ParseRuleset: %v", err)
+	}
+	ApplyDiagnostics(&rs, Diagnostics{Commands: []CommandDiagnostic{
+		{
+			Name: "iptables",
+			Args: []string{"-t", "filter", "-L", "-v", "-n", "-x", "--line-numbers"},
+			Stdout: `Chain INPUT (policy ACCEPT 7 packets, 700 bytes)
+num      pkts      bytes target     prot opt in     out     source               destination
+1        11        1100  ACCEPT     all  --  *      *       0.0.0.0/0            0.0.0.0/0
+2        22        2200  ACCEPT     all  --  *      *       0.0.0.0/0            0.0.0.0/0
+`,
+			ExitCode: 0,
+		},
+	}})
+	if rs.FilterRules[0].Position.LineNumber != 1 || rs.FilterRules[0].Counters.Packets != 11 {
+		t.Fatalf("first rule metadata not applied: %#v", rs.FilterRules[0])
+	}
+	if rs.FilterRules[1].Position.LineNumber != 2 || rs.FilterRules[1].Counters.Bytes != 2200 {
+		t.Fatalf("second rule metadata not applied: %#v", rs.FilterRules[1])
+	}
+	if rs.Policies[0].Counters.Packets != 7 || rs.Policies[0].Counters.Bytes != 700 {
+		t.Fatalf("policy counters not applied: %#v", rs.Policies[0])
+	}
+}
+
+func TestParseCommonEditableRules(t *testing.T) {
+	raw := `*filter
+:INPUT ACCEPT [0:0]
+-A INPUT -p tcp -m multiport --dports 80,443 -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT
+-A INPUT -j LOG --log-prefix "drop "
+COMMIT
+*nat
+:PREROUTING ACCEPT [0:0]
+:POSTROUTING ACCEPT [0:0]
+-A POSTROUTING -s 10.0.0.0/24 -j SNAT --to-source 203.0.113.10
+-A PREROUTING -p tcp --dport 8080 -j REDIRECT --to-ports 80
+COMMIT
+`
+	rs, err := ParseRuleset(raw)
+	if err != nil {
+		t.Fatalf("ParseRuleset: %v", err)
+	}
+	if len(rs.RawRules) != 0 {
+		t.Fatalf("expected common rules to be structured, got raw %#v", rs.RawRules)
+	}
+	if rs.FilterRules[0].DestinationPort != "80,443" || rs.FilterRules[0].State != "NEW,ESTABLISHED" {
+		t.Fatalf("multiport/state not parsed: %#v", rs.FilterRules[0])
+	}
+	if rs.FilterRules[1].Target != "LOG" || rs.FilterRules[1].LogPrefix != "drop " {
+		t.Fatalf("LOG rule not parsed: %#v", rs.FilterRules[1])
+	}
+	if rs.NatRules[0].Type != "snat" || rs.NatRules[0].ToSource != "203.0.113.10" {
+		t.Fatalf("SNAT rule not parsed: %#v", rs.NatRules[0])
+	}
+	if rs.NatRules[1].Type != "redirect" || rs.NatRules[1].ToPorts != "80" {
+		t.Fatalf("REDIRECT rule not parsed: %#v", rs.NatRules[1])
 	}
 }
 

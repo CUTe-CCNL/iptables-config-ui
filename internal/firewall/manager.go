@@ -60,7 +60,7 @@ func (m *Manager) Rules(ctx context.Context) (Ruleset, error) {
 	if err != nil {
 		return Ruleset{}, err
 	}
-	return ParseRuleset(raw)
+	return m.parseRuleset(ctx, raw)
 }
 
 func (m *Manager) Validate(rs Ruleset) ValidationResult {
@@ -97,7 +97,7 @@ func (m *Manager) Apply(ctx context.Context, req ApplyRequest) (Ruleset, error) 
 		}
 		return Ruleset{}, fmt.Errorf("apply failed and was rolled back: %w", err)
 	}
-	return ParseRuleset(nextRaw)
+	return m.parseRuleset(ctx, nextRaw)
 }
 
 func (m *Manager) Rollback(ctx context.Context) (Ruleset, error) {
@@ -110,5 +110,16 @@ func (m *Manager) Rollback(ctx context.Context) (Ruleset, error) {
 		return Ruleset{}, err
 	}
 	m.lastRollbackUsed = true
-	return ParseRuleset(m.lastRollbackRaw)
+	return m.parseRuleset(ctx, m.lastRollbackRaw)
+}
+
+func (m *Manager) parseRuleset(ctx context.Context, raw string) (Ruleset, error) {
+	ruleset, err := ParseRuleset(raw)
+	if err != nil {
+		return Ruleset{}, err
+	}
+	if diagnosticRunner, ok := m.runner.(DiagnosticsRunner); ok {
+		ApplyDiagnostics(&ruleset, diagnosticRunner.Diagnostics(ctx, raw))
+	}
+	return ruleset, nil
 }

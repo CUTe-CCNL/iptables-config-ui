@@ -48,6 +48,7 @@ type SortableDataTableProps<TData, TValue> = {
   dragLabel: string
   getRowId: (row: TData) => string
   onReorder: (activeId: string, overId: string) => void
+  canDragRow?: (row: TData) => boolean
   className?: string
   ariaLabel?: string
   density?: "default" | "compact"
@@ -61,6 +62,7 @@ export function SortableDataTable<TData, TValue>({
   dragLabel,
   getRowId,
   onReorder,
+  canDragRow,
   className,
   ariaLabel,
   density = "default",
@@ -73,6 +75,9 @@ export function SortableDataTable<TData, TValue>({
     getCoreRowModel: getCoreRowModel(),
   })
   const itemIds = data.map((item) => getRowId(item))
+  const draggableIds = new Set(
+    data.filter((item) => canDragRow?.(item) ?? true).map((item) => getRowId(item))
+  )
   const sensors = useSensors(
     useSensor(PointerSensor),
     useSensor(KeyboardSensor, {
@@ -83,6 +88,9 @@ export function SortableDataTable<TData, TValue>({
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event
     if (!over || active.id === over.id) return
+    if (!draggableIds.has(String(active.id)) || !draggableIds.has(String(over.id))) {
+      return
+    }
 
     onReorder(String(active.id), String(over.id))
   }
@@ -144,7 +152,7 @@ export function SortableDataTable<TData, TValue>({
                       key={row.id}
                       row={row}
                       dragLabel={dragLabel}
-                      disabled={itemIds.length < 2}
+                      disabled={itemIds.length < 2 || !draggableIds.has(row.id)}
                       density={density}
                     />
                   ))}

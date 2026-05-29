@@ -195,7 +195,7 @@ export function ChainManager({
   const [chainName, setChainName] = useState("")
   const [errors, setErrors] = useState<string[]>([])
   const chains = useMemo(
-    () => tableChainNames(ruleset, table),
+    () => tableChainNames(ruleset, table, { includeDefaults: true }),
     [ruleset, table]
   )
   const customPolicies = useMemo(
