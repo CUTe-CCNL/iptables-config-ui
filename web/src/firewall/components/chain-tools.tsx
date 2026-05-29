@@ -16,13 +16,15 @@ import {
 } from "@/components/ui/select"
 import { useI18n } from "@/lib/i18n"
 import { newId, nextOrder } from "@/lib/utils"
-import type { Policy, Ruleset } from "@/types/firewall"
+import type { FilterRule, NatRule, Policy, Ruleset } from "@/types/firewall"
 
-import { ALL_CHAINS_VALUE, CHAIN_NAME_RE } from "../constants"
+import { ALL_CHAINS_VALUE, BUILT_IN_CHAINS, CHAIN_NAME_RE } from "../constants"
 import {
+  chainBindingStates,
   hasExternalChainReference,
   isBuiltInChain,
   tableChainNames,
+  type ChainBindingState,
 } from "../rules"
 import type { TableName } from "../types"
 import { ErrorList } from "./form-fields"
@@ -193,7 +195,9 @@ export function ChainManager({
   const { t } = useI18n()
   const inputId = useMemo(() => newId(`${table}-chain`), [table])
   const [chainName, setChainName] = useState("")
+  const [selectedBindings, setSelectedBindings] = useState<string[]>([])
   const [errors, setErrors] = useState<string[]>([])
+  const builtInChains = BUILT_IN_CHAINS[table]
   const chains = useMemo(
     () => tableChainNames(ruleset, table, { includeDefaults: true }),
     [ruleset, table]
@@ -209,6 +213,18 @@ export function ChainManager({
     [ruleset.policies, table]
   )
 
+  function toggleSelectedBinding(sourceChain: string, checked: boolean) {
+    setSelectedBindings((current) => {
+      if (checked) {
+        return current.includes(sourceChain)
+          ? current
+          : [...current, sourceChain]
+      }
+
+      return current.filter((chain) => chain !== sourceChain)
+    })
+  }
+
   function addChain() {
     const chain = chainName.trim()
     if (!CHAIN_NAME_RE.test(chain)) {
@@ -220,21 +236,39 @@ export function ChainManager({
       return
     }
 
+    const sourceChains = builtInChains.filter((sourceChain) =>
+      selectedBindings.includes(sourceChain)
+    )
+    const policies = [
+      ...ruleset.policies,
+      {
+        table,
+        chain,
+        policy: "-",
+        order: nextOrder(
+          ruleset.policies.filter((item) => item.table === table)
+        ),
+      },
+    ]
+
     onChange({
       ...ruleset,
-      policies: [
-        ...ruleset.policies,
-        {
-          table,
-          chain,
-          policy: "-",
-          order: nextOrder(
-            ruleset.policies.filter((item) => item.table === table)
-          ),
-        },
-      ],
+      policies,
+      filterRules:
+        table === "filter"
+          ? appendFilterBindingRules(
+              ruleset.filterRules,
+              chain,
+              sourceChains
+            )
+          : ruleset.filterRules,
+      natRules:
+        table === "nat"
+          ? appendNatBindingRules(ruleset.natRules, chain, sourceChains)
+          : ruleset.natRules,
     })
     setChainName("")
+    setSelectedBindings([])
     setErrors([])
     toast.success(t("toastChainAdded", { chain }))
   }
@@ -264,6 +298,61 @@ export function ChainManager({
     })
     setErrors([])
     toast.success(t("toastChainDeleted", { chain }))
+  }
+
+  function updateChainBinding(
+    targetChain: string,
+    binding: ChainBindingState,
+    checked: boolean
+  ) {
+    if (checked && binding.managedRuleIds.length === 0) {
+      onChange({
+        ...ruleset,
+        filterRules:
+          table === "filter"
+            ? [
+                ...ruleset.filterRules,
+                createFilterBindingRule(
+                  binding.sourceChain,
+                  targetChain,
+                  nextOrder(ruleset.filterRules)
+                ),
+              ]
+            : ruleset.filterRules,
+        natRules:
+          table === "nat"
+            ? [
+                ...ruleset.natRules,
+                createNatBindingRule(
+                  binding.sourceChain,
+                  targetChain,
+                  nextOrder(ruleset.natRules)
+                ),
+              ]
+            : ruleset.natRules,
+      })
+      setErrors([])
+      return
+    }
+
+    if (!checked && binding.managedRuleIds.length > 0) {
+      onChange({
+        ...ruleset,
+        filterRules:
+          table === "filter"
+            ? ruleset.filterRules.filter(
+                (rule) => !binding.managedRuleIds.includes(rule.id)
+              )
+            : ruleset.filterRules,
+        natRules:
+          table === "nat"
+            ? ruleset.natRules.filter(
+                (rule) => !binding.managedRuleIds.includes(rule.id)
+              )
+            : ruleset.natRules,
+      })
+      setErrors([])
+    }
   }
 
   return (
@@ -297,29 +386,98 @@ export function ChainManager({
           {t("addChain")}
         </Button>
       </div>
+      <div className="grid gap-2">
+        <Label>{t("chainBindingsTitle")}</Label>
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+          {builtInChains.map((sourceChain) => (
+            <label
+              key={sourceChain}
+              className="flex min-h-9 items-center gap-2 rounded-md border px-2 py-2 text-sm"
+            >
+              <input
+                type="checkbox"
+                className="size-4 accent-primary"
+                checked={selectedBindings.includes(sourceChain)}
+                onChange={(event) =>
+                  toggleSelectedBinding(sourceChain, event.target.checked)
+                }
+              />
+              <span className="font-mono">{sourceChain}</span>
+            </label>
+          ))}
+        </div>
+      </div>
       <ErrorList errors={errors} />
       {customPolicies.length ? (
-        <div className="flex flex-wrap gap-2">
+        <div className="grid gap-3">
           {customPolicies.map((policy) => {
             const referenced = hasExternalChainReference(
               ruleset,
               table,
               policy.chain
             )
+            const bindings = chainBindingStates(ruleset, table, policy.chain)
             return (
               <div
                 key={`${policy.table}-${policy.chain}`}
-                className="flex items-center gap-2 rounded-md border bg-background px-3 py-2"
+                className="grid gap-3 rounded-md border bg-background px-3 py-3"
               >
-                <span className="font-mono text-sm">{policy.chain}</span>
-                <Badge variant="secondary">{t("customChainBadge")}</Badge>
-                <IconButton
-                  label={referenced ? t("chainInUse") : t("deleteChain")}
-                  onClick={() => removeChain(policy.chain)}
-                  disabled={referenced}
-                >
-                  <Trash2 className="size-4" />
-                </IconButton>
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-sm">{policy.chain}</span>
+                  <Badge variant="secondary">{t("customChainBadge")}</Badge>
+                  <IconButton
+                    label={referenced ? t("chainInUse") : t("deleteChain")}
+                    onClick={() => removeChain(policy.chain)}
+                    disabled={referenced}
+                  >
+                    <Trash2 className="size-4" />
+                  </IconButton>
+                </div>
+                <div className="grid gap-2">
+                  <Label>{t("chainBindingsTitle")}</Label>
+                  <div className="grid gap-2">
+                    {bindings.map((binding) => {
+                      const checked = binding.managedRuleIds.length > 0
+                      const blocked =
+                        !checked && (binding.conditional || binding.raw)
+
+                      return (
+                        <label
+                          key={binding.sourceChain}
+                          data-disabled={blocked ? true : undefined}
+                          className="flex min-h-9 flex-wrap items-center gap-2 rounded-md border px-2 py-2 text-sm data-[disabled=true]:opacity-60"
+                        >
+                          <input
+                            type="checkbox"
+                            className="size-4 accent-primary disabled:cursor-not-allowed"
+                            checked={checked}
+                            disabled={blocked}
+                            onChange={(event) =>
+                              updateChainBinding(
+                                policy.chain,
+                                binding,
+                                event.target.checked
+                              )
+                            }
+                          />
+                          <span className="font-mono">
+                            {binding.sourceChain}
+                          </span>
+                          {binding.conditional ? (
+                            <Badge variant="outline">
+                              {t("conditionalChainReference")}
+                            </Badge>
+                          ) : null}
+                          {binding.raw ? (
+                            <Badge variant="outline">
+                              {t("rawChainReference")}
+                            </Badge>
+                          ) : null}
+                        </label>
+                      )
+                    })}
+                  </div>
+                </div>
               </div>
             )
           })}
@@ -329,6 +487,67 @@ export function ChainManager({
       )}
     </div>
   )
+}
+
+function appendFilterBindingRules(
+  rules: FilterRule[],
+  targetChain: string,
+  sourceChains: string[]
+) {
+  const order = nextOrder(rules)
+
+  return [
+    ...rules,
+    ...sourceChains.map((sourceChain, index) =>
+      createFilterBindingRule(sourceChain, targetChain, order + index * 10)
+    ),
+  ]
+}
+
+function appendNatBindingRules(
+  rules: NatRule[],
+  targetChain: string,
+  sourceChains: string[]
+) {
+  const order = nextOrder(rules)
+
+  return [
+    ...rules,
+    ...sourceChains.map((sourceChain, index) =>
+      createNatBindingRule(sourceChain, targetChain, order + index * 10)
+    ),
+  ]
+}
+
+function createFilterBindingRule(
+  sourceChain: string,
+  targetChain: string,
+  order: number
+): FilterRule {
+  return {
+    id: newId("filter"),
+    table: "filter",
+    chain: sourceChain,
+    target: targetChain,
+    order,
+    readOnly: false,
+  }
+}
+
+function createNatBindingRule(
+  sourceChain: string,
+  targetChain: string,
+  order: number
+): NatRule {
+  return {
+    id: newId("nat"),
+    type: "jump",
+    table: "nat",
+    chain: sourceChain,
+    target: targetChain,
+    order,
+    readOnly: false,
+  }
 }
 
 export function ChainFilterSelect({

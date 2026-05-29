@@ -10,6 +10,13 @@ import type {
 import { BUILT_IN_CHAINS } from "./constants"
 import type { TableName } from "./types"
 
+export type ChainBindingState = {
+  sourceChain: string
+  managedRuleIds: string[]
+  conditional: boolean
+  raw: boolean
+}
+
 export function tableChainNames(
   ruleset: Ruleset,
   table: TableName,
@@ -188,6 +195,16 @@ export function hasExternalChainReference(
     return true
   }
 
+  if (
+    table === "nat" &&
+    ruleset.natRules.some(
+      (rule) =>
+        rule.chain !== chain && rule.type === "jump" && rule.target === chain
+    )
+  ) {
+    return true
+  }
+
   return ruleset.rawRules.some(
     (rule) =>
       rule.table === table &&
@@ -196,9 +213,117 @@ export function hasExternalChainReference(
   )
 }
 
+export function chainBindingStates(
+  ruleset: Ruleset,
+  table: TableName,
+  targetChain: string
+): ChainBindingState[] {
+  return BUILT_IN_CHAINS[table].map((sourceChain) =>
+    chainBindingState(ruleset, table, sourceChain, targetChain)
+  )
+}
+
+export function chainBindingState(
+  ruleset: Ruleset,
+  table: TableName,
+  sourceChain: string,
+  targetChain: string
+): ChainBindingState {
+  const managedRuleIds =
+    table === "filter"
+      ? ruleset.filterRules
+          .filter((rule) =>
+            isManagedFilterChainBinding(rule, sourceChain, targetChain)
+          )
+          .map((rule) => rule.id)
+      : ruleset.natRules
+          .filter((rule) =>
+            isManagedNatChainBinding(rule, sourceChain, targetChain)
+          )
+          .map((rule) => rule.id)
+
+  const conditional =
+    table === "filter"
+      ? ruleset.filterRules.some(
+          (rule) =>
+            rule.chain === sourceChain &&
+            rule.target === targetChain &&
+            !isManagedFilterChainBinding(rule, sourceChain, targetChain)
+        )
+      : ruleset.natRules.some(
+          (rule) =>
+            rule.chain === sourceChain &&
+            rule.type === "jump" &&
+            rule.target === targetChain &&
+            !isManagedNatChainBinding(rule, sourceChain, targetChain)
+        )
+
+  const raw = ruleset.rawRules.some(
+    (rule) =>
+      rule.table === table &&
+      rule.chain === sourceChain &&
+      rawRuleJumpsToChain(rule.line, targetChain)
+  )
+
+  return { sourceChain, managedRuleIds, conditional, raw }
+}
+
+function isManagedFilterChainBinding(
+  rule: FilterRule,
+  sourceChain: string,
+  targetChain: string
+) {
+  return (
+    rule.chain === sourceChain &&
+    rule.target === targetChain &&
+    !filterRuleHasBindingConditions(rule)
+  )
+}
+
+function filterRuleHasBindingConditions(rule: FilterRule) {
+  return Boolean(
+    rule.protocol ||
+      rule.source ||
+      rule.destination ||
+      rule.inInterface ||
+      rule.outInterface ||
+      rule.sourcePort ||
+      rule.destinationPort ||
+      rule.state ||
+      rule.extra?.length
+  )
+}
+
+function isManagedNatChainBinding(
+  rule: NatRule,
+  sourceChain: string,
+  targetChain: string
+) {
+  return (
+    rule.chain === sourceChain &&
+    rule.type === "jump" &&
+    rule.target === targetChain &&
+    !natRuleHasBindingConditions(rule)
+  )
+}
+
+function natRuleHasBindingConditions(rule: NatRule) {
+  return Boolean(
+    rule.protocol ||
+      rule.listenPort ||
+      rule.destinationIp ||
+      rule.destinationPort ||
+      rule.sourceCidr ||
+      rule.destinationCidr ||
+      rule.inInterface ||
+      rule.outInterface ||
+      rule.extra?.length
+  )
+}
+
 function rawRuleJumpsToChain(line: string, chain: string) {
   return new RegExp(
-    `(?:^|\\s)(?:-j|--jump)\\s+${escapeRegExp(chain)}(?:\\s|$)`
+    `(?:^|\\s)(?:-j|--jump|-g|--goto)\\s+${escapeRegExp(chain)}(?:\\s|$)`
   ).test(line)
 }
 
